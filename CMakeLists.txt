@@ -235,15 +235,32 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     endif()
 
     # Version Options
-    add_definitions(-DWINVER=0x502
-                    -D_WIN32_IE=0x603
-                    -D_WIN32_WINNT=0x502
-                    -D_WIN32_WINDOWS=0x502
-                    -D_SETUPAPI_VER=0x502
-                    -DMINGW_HAS_SECURE_API=1
-                    -DD3D_UMD_INTERFACE_VERSION=0x000C # Vista
-                    -DDXGKDDI_INTERFACE_VERSION=0x1052 # Vista
-                    -DDLL_EXPORT_VERSION=${DLL_EXPORT_VERSION})
+    # NT6-LONGTERM: dual target por DLL_EXPORT_VERSION (el CI compila ambos).
+    # 0x502 = gaming estable NT5.2 (KSE + driver XP 353.62).
+    # >=0x600 = NT6.0 Vista/WS08 (version gate, ntoskrnl/ntdll NT6).
+    # ReactOS-NT6-Compile lo hardcodeaba a 0x600 (commit 9b63c30) y por eso
+    # rompia el build 0x502; aqui condicional para no romper gaming.
+    if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
+        add_definitions(-DWINVER=0x600
+                        -D_WIN32_IE=0x603
+                        -D_WIN32_WINNT=0x600
+                        -D_WIN32_WINDOWS=0x600
+                        -D_SETUPAPI_VER=0x600
+                        -DMINGW_HAS_SECURE_API=1
+                        -DD3D_UMD_INTERFACE_VERSION=0x000C # Vista
+                        -DDXGKDDI_INTERFACE_VERSION=0x1052 # Vista
+                        -DDLL_EXPORT_VERSION=${DLL_EXPORT_VERSION})
+    else()
+        add_definitions(-DWINVER=0x502
+                        -D_WIN32_IE=0x603
+                        -D_WIN32_WINNT=0x502
+                        -D_WIN32_WINDOWS=0x502
+                        -D_SETUPAPI_VER=0x502
+                        -DMINGW_HAS_SECURE_API=1
+                        -DD3D_UMD_INTERFACE_VERSION=0x000C # Vista
+                        -DDXGKDDI_INTERFACE_VERSION=0x1052 # Vista
+                        -DDLL_EXPORT_VERSION=${DLL_EXPORT_VERSION})
+    endif()
 
     # Arch Options
     if(ARCH STREQUAL "i386")

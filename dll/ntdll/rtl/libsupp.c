@@ -73,11 +73,18 @@ BOOLEAN
 NTAPI
 RtlpSetInDbgPrint(VOID)
 {
-    /* Check if it's already set and return TRUE if so */
+    /* Check if it's already set and return TRUE if so (TEB field renamed in NT6: cherry-pick 4decc15f) */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     if (NtCurrentTeb()->InDbgPrint) return TRUE;
 
     /* Set it and return */
     NtCurrentTeb()->InDbgPrint = TRUE;
+#else
+    if (NtCurrentTeb()->DbgInDebugPrint) return TRUE;
+
+    /* Set it and return */
+    NtCurrentTeb()->DbgInDebugPrint = TRUE;
+#endif
     return FALSE;
 }
 
@@ -86,7 +93,11 @@ NTAPI
 RtlpClearInDbgPrint(VOID)
 {
     /* Clear the flag */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     NtCurrentTeb()->InDbgPrint = FALSE;
+#else
+    NtCurrentTeb()->DbgInDebugPrint = FALSE;
+#endif
 }
 
 KPROCESSOR_MODE

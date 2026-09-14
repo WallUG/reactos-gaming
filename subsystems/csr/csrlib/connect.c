@@ -163,9 +163,11 @@ CsrpConnectToServer(
     /* Save the Process */
     CsrProcessId = ConnectionInfo.ServerProcessId;
 
-    /* Save CSR Section data */
+    /* Save CSR Section data (Heap field removed in NT6: cherry-pick 4decc15f family) */
     NtCurrentPeb()->ReadOnlySharedMemoryBase = ConnectionInfo.SharedSectionBase;
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     NtCurrentPeb()->ReadOnlySharedMemoryHeap = ConnectionInfo.SharedSectionHeap;
+#endif
     NtCurrentPeb()->ReadOnlyStaticServerData = ConnectionInfo.SharedStaticServerData;
 
     /* Create the port heap */

@@ -13,6 +13,26 @@
  * PROGRAMMERS:     Alex Ionescu (alex.ionescu@reactos.org)
  */
 
+/* NT6-LONGTERM (cherry-pick 874731ed5cb + update a 6001.18000 de
+ * ReactOS-NT6-Compile 382c340600d): con NTDDI_VERSION >= VISTA el producto
+ * se reporta como Windows NT 6.0.6001. Sin NTDDI (o < VISTA) sigue 5.2.
+ * NTDDI_VERSION deriva de _WIN32_WINNT en sdkddkver.h, que a su vez viene
+ * de -D_WIN32_WINNT en CMakeLists (condicional por DLL_EXPORT_VERSION).
+ * KSE sigue mintiendo 5.2 al driver por versionlie.c aunque el OS sea 6.0. */
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+//
+// Windows NT 6.0.6001.18000
+//
+#define VER_PRODUCTBUILD                    6001
+#define VER_PRODUCTBUILD_QFE                18000
+
+#define VER_PRODUCTMAJORVERSION             6
+#define VER_PRODUCTMINORVERSION             0
+#define VER_PRODUCTVERSION_W                (0x0600)
+#define VER_PRODUCTVERSION_DW               (0x06000000 | VER_PRODUCTBUILD)
+
+#else
+
 //
 // Windows NT Build 3790.3959
 //
@@ -26,6 +46,7 @@
 #define VER_PRODUCTMINORVERSION             2
 #define VER_PRODUCTVERSION_W                (0x0502)
 #define VER_PRODUCTVERSION_DW               (0x05020000 | VER_PRODUCTBUILD)
+#endif
 
 //
 // Not a beta

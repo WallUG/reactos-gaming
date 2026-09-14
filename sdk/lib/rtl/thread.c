@@ -290,8 +290,10 @@ RtlExitUserThread(NTSTATUS Status)
     /* Call the Loader and tell him to notify the DLLs */
     LdrShutdownThread();
 
-    /* Shut us down */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
+    /* Shut us down (NT5 TEB flag, removed in NT6: cherry-pick 4decc15f) */
     NtCurrentTeb()->FreeStackOnTermination = TRUE;
+#endif
     NtTerminateThread(NtCurrentThread(), Status);
 }
 
