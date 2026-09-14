@@ -78,3 +78,14 @@ Ver fichero de contexto §6 para la lista completa e intermedios.
 Salida nondeterminista free-proc, `0x50` mode-switch en stack nuevo, Video1
 `0x22`, 30→60 en pesadas (build `-O0`), ratón Win32 #31, RX serie, revertir
 TEMP-DEBUG antes de publicar. Detalle en contexto gigante §8.
+
+## 8. Rama NT6-Longterm (largo recorrido)
+
+- Rama `nt6-longterm` (base `main` 7846249175b): NT6.0 real (Vista 6.0.6001).
+- Remoto `longhorn` con 73 ramas fetcheadas (`longhorn/*`).
+- Base candidata `ReactOS-NT6-Compile` (3455 files, +130k/-1M): `ntverp.h`→6.0,
+  `sdkddkver` default NT6, `ntoskrnl` ALPC/scheduler/vista, `ntdll`/`kernelbase`.
+  Pero **borra DWM/milcore**: merge bruto rompería gaming.
+- Estrategia: cherry-pick selectivo `ntverp→ntoskrnl/ndk→ntdll/kernelbase→smoke`,
+  luego `KernelBaseBringup`/`Steam-x64`/`MSDX`. Ver `docs/gaming/NT6-ROADMAP.md`.
+- `main` queda estable gaming; `nt6-longterm` es la que se rompe.
