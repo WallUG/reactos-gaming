@@ -165,6 +165,17 @@ KeSetEvent(IN PKEVENT Event,
     LONG PreviousState;
     PKTHREAD Thread;
     ASSERT_EVENT(Event);
+    /* Best-effort above DISPATCH_LEVEL (e.g. debugger paths signaling
+     * with TPR at HIGH): waiters can't be woken at HIGH anyway, so
+     * just mark signaled and return (the consumer re-checks state).
+     * Without this, KiAcquireDispatcherLock raises DISPATCH from
+     * HIGH -> bugcheck. */
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        PreviousState = Event->Header.SignalState;
+        Event->Header.SignalState = 1;
+        return PreviousState;
+    }
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
     /*

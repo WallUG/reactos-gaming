@@ -125,8 +125,34 @@ KiConnectVectorToInterrupt(IN PKINTERRUPT Interrupt,
         Handler = (PVOID)&Interrupt->DispatchCode;
     }
 
-    /* Register the interrupt */
+    /* Register the interrupt (local IDT; mirror to APs below) */
     KeRegisterInterruptHandler(Interrupt->Vector, Handler);
+
+#ifdef CONFIG_SMP
+    /* IDT-sync: each AP's IDT is a copy taken at its startup; vectors
+     * registered later (PnP: IRQ->C1...) stayed only on the BSP and
+     * the AP vectored to garbage. Mirror the entry (Offset only, like
+     * the inline: Selector/Access/P come from the template). Direct
+     * write without IPI: doesn't depend on the packet protocol (which
+     * stalls with a deaf AP) and doesn't touch IRQL. */
+    {
+        UCHAR _entry = HalVectorToIDTEntry(Interrupt->Vector);
+        ULONG_PTR _addr = PtrToUlong(Handler);
+        ULONG _cpu;
+        for (_cpu = 1; _cpu < (ULONG)KeNumberProcessors; _cpu++)
+        {
+            PKIDTENTRY _idt = KiGetApIdt(_cpu);
+            if (_idt)
+            {
+                /* Halves with local IF=0 (like the inline). */
+                BOOLEAN _w = KeDisableInterrupts();
+                _idt[_entry].ExtendedOffset = (USHORT)(_addr >> 16);
+                _idt[_entry].Offset = (USHORT)_addr;
+                KeRestoreInterrupts(_w);
+            }
+        }
+    }
+#endif
 }
 
 FORCEINLINE

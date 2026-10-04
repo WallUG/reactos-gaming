@@ -323,8 +323,10 @@ KeTryToAcquireSpinLockAtDpcLevel(IN OUT PKSPIN_LOCK SpinLock)
     /* Make sure that we don't own the lock already */
     if (((KSPIN_LOCK)KeGetCurrentThread() | 1) == *SpinLock)
     {
-        /* We do, bugcheck! */
-        KeBugCheckEx(SPIN_LOCK_ALREADY_OWNED, (ULONG_PTR)SpinLock, 0, 0, 0);
+        /* We do: in try-acquire the correct behavior is to fail and
+         * let the caller decide, not to bugcheck (0xF killed racy
+         * SMP boots). */
+        return FALSE;
     }
 #endif
 

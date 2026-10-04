@@ -145,10 +145,10 @@ KiInitMachineDependent(VOID)
                     CurrentSample->TSCStart = __rdtsc();
                     CurrentSample->PerfFreq.QuadPart = -50000;
 
-                    /* Sleep for this sample */
-                    KeDelayExecutionThread(KernelMode,
-                                           FALSE,
-                                           &CurrentSample->PerfFreq);
+                    /* Sleep for this sample: Stall instead of Delay
+                     * (the clock ISR may not tick yet -> Delay hangs
+                     * forever; Stall burns 50ms without needing ticks). */
+                    KeStallExecutionProcessor(50000);
 
                     /* Do another dummy CPUID */
                     KiCpuId(&CpuInfo, 0);
@@ -163,6 +163,14 @@ KiInitMachineDependent(VOID)
                                                CurrentSample->PerfStart.QuadPart;
                     CurrentSample->TSCDelta = CurrentSample->TSCEnd -
                                               CurrentSample->TSCStart;
+
+                    /* Without ticks the perfcounter doesn't advance
+                     * (PerfDelta==0 -> division by zero). Skip this
+                     * CPU's calibration (MHz stays 0). */
+                    if (CurrentSample->PerfDelta == 0)
+                    {
+                        break;
+                    }
 
                     /* Compute CPU Speed */
                     CurrentSample->MHz = (ULONG)((CurrentSample->TSCDelta *
@@ -537,6 +545,11 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
     {
         /* FIXME */
         DPRINT1("Starting CPU#%u - you are brave\n", Number);
+
+        /* The AP arrives here at HIGH_LEVEL. Without lowering,
+         * thread startup raises to SYNCH from HIGH -> bugcheck, and
+         * incoming IPIs bounce forever. Match the BSP (APC). */
+        KeLowerIrql(APC_LEVEL);
     }
 
     /* Setup the Idle Thread */
@@ -701,6 +714,13 @@ KiSystemStartupBootStack(VOID)
     Thread = KeGetCurrentThread();
     Thread->Priority = 0;
 
+    /* The AP starts with a clean SEH chain. Without this it inherits
+     * a stale ExceptionList and the first ISR dies asserting. */
+    if (KeGetCurrentProcessorNumber() != 0)
+    {
+        KeGetPcr()->NtTib.ExceptionList = EXCEPTION_CHAIN_END;
+    }
+
     /* Force interrupts enabled and lower IRQL back to DISPATCH_LEVEL */
     _enable();
     KeLowerIrql(DISPATCH_LEVEL);
@@ -825,16 +845,16 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     RtlCopyMemory(&Idt[8], &DoubleFaultEntry, sizeof(KIDTENTRY));
 
 AppCpuInit:
-    //TODO: We don't setup IPIs yet so freeze other processors here.
+    /* Don't freeze APs here. The BSP waits in KeStartAllProcessors and
+     * must service the AP's Verify/HalInit IPIs; signaling early lets
+     * the BSP run off while the AP spins unattended. The real signal
+     * is given by the AP at the end of KiInitializeKernel when idle.
+     * Derive Pcr from the current FS (AP trampoline points at its Pcr)
+     * instead of an uninitialized BSP variable. */
     if (Cpu)
     {
-        KeMemoryBarrier();
-        LoaderBlock->Prcb = 0;
-
-        for (;;)
-        {
-            YieldProcessor();
-        }
+        /* Derive Pcr from current FS instead of BSP variable */
+        Pcr = (PKIPCR)KeGetPcr();
     }
 
     /* Loop until we can release the freeze lock */

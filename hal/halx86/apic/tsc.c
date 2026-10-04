@@ -55,8 +55,8 @@ NTAPI
 HalpInitializeTsc(VOID)
 {
     ULONG_PTR Flags;
-    PVOID PreviousHandler;
     UCHAR RegisterA, RegisterB;
+    ULONG i;
 
     /* Check if the CPU supports RDTSC */
     if (!(KeGetCurrentPrcb()->FeatureBits & KF_RDTSC))
@@ -68,7 +68,11 @@ HalpInitializeTsc(VOID)
     Flags = __readeflags();
     _disable();
 
-    /* Enable the periodic interrupt in the CMOS */
+    /* Calibrate by POLLING the PF flag of RTC Reg C. The old IRQ
+     * method (TscCalibrationISR via IDT + _enable + wait) caused GPF
+     * when vectorizing the first tick on SMP/MP HALs. Polling touches
+     * neither IDT nor IOAPIC, works with IF=0 on UP and SMP, and takes
+     * ~4ms (4 samples at 1024Hz). */
     RegisterB = HalpReadCmos(RTC_REGISTER_B);
     HalpWriteCmos(RTC_REGISTER_B, RegisterB | RTC_REG_B_PI);
 
@@ -77,34 +81,23 @@ HalpInitializeTsc(VOID)
     RegisterA = (RegisterA & 0xF0) | RTC_MODE;
     HalpWriteCmos(RTC_REGISTER_A, RegisterA);
 
-    /* Save old IDT entry */
-    PreviousHandler = KeQueryInterruptHandler(APIC_CLOCK_VECTOR);
-
-    /* Set the calibration ISR */
-    KeRegisterInterruptHandler(APIC_CLOCK_VECTOR, TscCalibrationISR);
-
-    /* Reset TSC value to 0 */
-    __writemsr(MSR_RDTSC, 0);
-
-    /* Enable the timer interrupt */
-    HalEnableSystemInterrupt(APIC_CLOCK_VECTOR, CLOCK_LEVEL, Latched);
-
-    /* Read register C, so that the next interrupt can happen */
+    /* Clear pending PF */
     HalpReadCmos(RTC_REGISTER_C);
 
-    /* Wait for completion */
-    _enable();
-    while (TscCalibrationPhase < NUM_SAMPLES) _ReadWriteBarrier();
-    _disable();
+    for (i = 0; i < NUM_SAMPLES; i++)
+    {
+        ULONGLONG TscStart = __rdtsc();
+        /* Wait for next PF tick with timeout (~0.5e9 TSC cycles) */
+        while (!(HalpReadCmos(RTC_REGISTER_C) & 0x40))
+        {
+            if ((ULONGLONG)(__rdtsc() - TscStart) > 500000000ULL)
+                break;
+        }
+        TscCalibrationArray[i] = __rdtsc();
+    }
 
     /* Disable the periodic interrupt in the CMOS */
     HalpWriteCmos(RTC_REGISTER_B, RegisterB & ~RTC_REG_B_PI);
-
-    /* Disable the timer interrupt */
-    HalDisableSystemInterrupt(APIC_CLOCK_VECTOR, CLOCK_LEVEL);
-
-    /* Restore the previous handler */
-    KeRegisterInterruptHandler(APIC_CLOCK_VECTOR, PreviousHandler);
 
     /* Calculate an average, using simplified linear regression */
     HalpCpuClockFrequency.QuadPart = DoLinearRegression(NUM_SAMPLES - 1,

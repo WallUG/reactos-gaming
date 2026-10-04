@@ -84,9 +84,13 @@ RtcSetClockRate(UCHAR ClockRate)
     /* Read value of register A */
     RegisterA = HalpReadCmos(RTC_REGISTER_A);
 
-    /* Change lower 4 bits to new rate */
-    RegisterA &= 0xF0;
-    RegisterA |= ClockRate;
+    /* Change rate while forcing the divider chain on (DV2-0 = 010:
+     * normal 32.768 kHz operation). Some firmware leaves DV in another
+     * state where the RTC emits zero edges; without edges no tick ever
+     * latches into the IOAPIC. UIP (bit 7) is read-only, preserving it
+     * is harmless. */
+    RegisterA &= 0x80;
+    RegisterA |= 0x20 | ClockRate;
 
     /* Write the new value */
     HalpWriteCmos(RTC_REGISTER_A, RegisterA);
@@ -121,6 +125,13 @@ HalpInitializeClock(VOID)
 
     /* Set initial rate */
     RtcSetClockRate(HalpCurrentClockRate);
+
+    /* Acknowledge any stale RTC interrupt (read Register C) so the IRQ8
+     * line starts LOW: the edge-sweep in HalpInitPhase0 needs a clean
+     * baseline to latch fresh transitions into the IOAPIC. */
+    HalpAcquireCmosSpinLock();
+    HalpReadCmos(RTC_REGISTER_C);
+    HalpReleaseCmosSpinLock();
 
     /* Restore interrupt state */
     __writeeflags(EFlags);

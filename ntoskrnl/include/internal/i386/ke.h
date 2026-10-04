@@ -356,6 +356,14 @@ KeRegisterInterruptHandler(IN ULONG Vector,
 }
 
 //
+// Returns the AP's IDT copy (leaked APINFO, Idt[256] at offset 0),
+// or NULL if the CPU has no AP block. Resident, for late vector sync.
+//
+PKIDTENTRY
+NTAPI
+KiGetApIdt(IN ULONG Cpu);
+
+//
 // Returns the registered interrupt handler for a given IDT vector
 //
 FORCEINLINE

@@ -15,6 +15,7 @@
 
 #include <hal.h>
 #include "apicp.h"
+#include <smp.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -26,6 +27,7 @@
 
 ULONG ApicVersion;
 UCHAR HalpVectorToIndex[256];
+extern PPROCESSOR_IDENTITY HalpProcessorIdentity;
 
 #ifndef _M_AMD64
 const UCHAR
@@ -162,11 +164,15 @@ ApicRequestSelfInterrupt(IN UCHAR Vector, UCHAR TriggerMode)
     Flags = __readeflags();
     _disable();
 
-    /* Wait for the APIC to be idle */
-    do
+    /* Wait for the APIC to be idle. Bounded: a stuck ICR delivery
+     * would hang mute with IF=0 (seen live on SMP bring-up). */
     {
-        IcrStatus.Long0 = ApicRead(APIC_ICR0);
-    } while (IcrStatus.DeliveryStatus);
+        ULONG _icr = 10000000UL;
+        do
+        {
+            IcrStatus.Long0 = ApicRead(APIC_ICR0);
+        } while (IcrStatus.DeliveryStatus && --_icr);
+    }
 
     /* Write high dword first, then low dword to send the interrupt */
     ApicWrite(APIC_ICR1, Icr.Long1);
@@ -174,10 +180,15 @@ ApicRequestSelfInterrupt(IN UCHAR Vector, UCHAR TriggerMode)
 
     /* Wait until we see the interrupt request.
      * It will stay in requested state until we re-enable interrupts.
-     */
-    while (!(ApicRead(Irr) & IrrBit))
+     * Bounded (1K): if TPR masks the vector the IRR bit never sets
+     * and an unbounded wait burns ~10-30ms with IF=0 each time.
+     * 1K suffices for the healthy case (the set is immediate). */
     {
-        YieldProcessor();
+        ULONG _irr = 1000UL;
+        while (!(ApicRead(Irr) & IrrBit) && --_irr)
+        {
+            YieldProcessor();
+        }
     }
 
     /* Finally, restore the original interrupt state */
@@ -248,6 +259,20 @@ ApicLowerIrql(KIRQL Irql)
         /* Need to lower it back */
         ApicWrite(APIC_TPR, IrqlToTpr(Irql));
     }
+
+    /* Invariant hard<=soft: lazy can leave a high residue
+     * (tpr=0x41/pcr=0 seen live: masks devices and, worse,
+     * clock/IPI = deaf AP). Whatever its origin, lower sweeps it:
+     * only correct downward (benign hard<soft lazy is left alone). */
+    {
+        ULONG _tpr = ApicRead(APIC_TPR) & 0xFF;
+        ULONG _exp = HalpIRQLtoTPR[Irql];
+        if ((_tpr & 0xF0) > (_exp & 0xF0))
+        {
+            ApicWrite(APIC_TPR, _exp);
+            KeGetPcr()->IRR = Irql;
+        }
+    }
 }
 #else
 #define ApicLowerIrql ApicSetIrql
@@ -317,8 +342,10 @@ ApicInitializeLocalApic(ULONG Cpu)
     /* Set logical apic ID */
     ApicWrite(APIC_LDR, ApicLogicalId(Cpu) << 24);
 
-    /* Set the spurious ISR */
-    KeRegisterInterruptHandler(APIC_SPURIOUS_VECTOR, ApicSpuriousService);
+    /* Set the spurious ISR: full trap frame + EOI exit discipline,
+     * same as the clock ISR (a bare iret handler can't EOI safely
+     * if the vector ever fires under SMP). */
+    KeRegisterInterruptHandler(APIC_SPURIOUS_VECTOR, HalpSpuriousInterrupt);
 
     /* Create a template LVT */
     LvtEntry.Long = 0;
@@ -351,6 +378,13 @@ ApicInitializeLocalApic(ULONG Cpu)
     LvtEntry.TriggerMode = APIC_TGM_Level;
     ApicWrite(APIC_LINT1, LvtEntry.Long);
 
+    /* Leave the error LVT masked (no handler registered; an
+     * unmasked error vector fires Unexpected prematurely). */
+    LvtEntry.Mask = 1;
+    /* Clear latched ESR (write-0 + read, per Intel spec). */
+    ApicWrite(APIC_ESR, 0);
+    (void)ApicRead(APIC_ESR);
+
     /* Enable error LVTR */
     LvtEntry.Vector = APIC_ERROR_VECTOR;
     LvtEntry.MessageType = APIC_MT_Fixed;
@@ -364,6 +398,24 @@ ApicInitializeLocalApic(ULONG Cpu)
 #endif
 }
 
+/* Route device IRQs across CPUs. IRQs 10/11 (USB/IDE) and 14/15
+ * (legacy IDE) stay on the BSP: on an AP a stuck level line is never
+ * cleaned (its ISR doesn't run there yet) -> storm + timeouts, while
+ * on the BSP the owner ISR cleans and I/O completes. */
+UCHAR
+HalpRoundRobinLapicId(UCHAR Index)
+{
+    static ULONG _rr = 0;
+    ULONG _n = KeNumberProcessors ? KeNumberProcessors : 1;
+    ULONG _cpu;
+    if (_n > 8) _n = 8;
+    if (_n <= 1) return (UCHAR)(ApicRead(APIC_ID) >> 24);
+    if (Index == 10 || Index == 11 || Index == 14 || Index == 15)
+        return (UCHAR)(ApicRead(APIC_ID) >> 24);
+    _cpu = (_rr++) % _n;
+    return HalpProcessorIdentity[_cpu].LapicId;
+}
+
 UCHAR
 NTAPI
 HalpAllocateSystemInterrupt(
@@ -375,10 +427,11 @@ HalpAllocateSystemInterrupt(
     ASSERT(Irq < APIC_MAX_IRQ);
     ASSERT(HalpVectorToIndex[Vector] == APIC_FREE_VECTOR);
 
-    /* Setup a redirection entry */
+    /* Setup a redirection entry: Fixed/Physical, destination set for
+     * real in Enable (entry goes in masked). */
     ReDirReg.Vector = Vector;
-    ReDirReg.MessageType = APIC_MT_LowestPriority;
-    ReDirReg.DestinationMode = APIC_DM_Logical;
+    ReDirReg.MessageType = APIC_MT_Fixed;
+    ReDirReg.DestinationMode = APIC_DM_Physical;
     ReDirReg.DeliveryStatus = 0;
     ReDirReg.Polarity = 0;
     ReDirReg.RemoteIRR = 0;
@@ -413,11 +466,19 @@ HalpGetRootInterruptVector(
     /* Check if it's used */
     if (Vector != APIC_FREE_VECTOR)
     {
-        /* Calculate IRQL */
-        NT_ASSERT(HalpVectorToIndex[Vector] == BusInterruptLevel);
-        *OutIrql = HalpVectorToIrql(Vector);
+        /* If the owner matches, fast path as before; otherwise the
+         * tables desynced across reservations (this IRQ's vector
+         * belongs to another IRQ) -> fall through to alloc a free
+         * vector (correct for sharing/collisions). */
+        if (HalpVectorToIndex[Vector] == BusInterruptLevel)
+        {
+            /* Calculate IRQL */
+            *OutIrql = HalpVectorToIrql(Vector);
+            goto Exit;
+        }
+        DbgPrint("HalpGetRootInterruptVector: IRQ %lu stale vec %02x (owner %02x), reallocating\n",
+                 BusInterruptLevel, Vector, HalpVectorToIndex[Vector]);
     }
-    else
     {
         ULONG Offset;
 
@@ -473,6 +534,9 @@ ApicInitializeIOApic(VOID)
     Pte->CacheDisable = 1;
     Pte->Global = 1;
     _ReadWriteBarrier();
+    /* Invalidate TLB after touching the PTE, otherwise the CPU may
+     * keep using the stale translation -> corruption/GPF. */
+    __invlpg((PVOID)IOAPIC_BASE);
 
     /* Setup a redirection entry */
     ReDirReg.Vector = APIC_FREE_VECTOR;
@@ -528,6 +592,7 @@ HalpInitializePICs(IN BOOLEAN EnableInterrupts)
     /* Manually reserve some vectors */
     HalpVectorToIndex[APC_VECTOR] = APIC_RESERVED_VECTOR;
     HalpVectorToIndex[DISPATCH_VECTOR] = APIC_RESERVED_VECTOR;
+    HalpVectorToIndex[APIC_IPI_VECTOR] = APIC_RESERVED_VECTOR;
     HalpVectorToIndex[APIC_CLOCK_VECTOR] = 8;
     HalpVectorToIndex[CLOCK_IPI_VECTOR] = APIC_RESERVED_VECTOR;
     HalpVectorToIndex[APIC_SPURIOUS_VECTOR] = APIC_RESERVED_VECTOR;
@@ -544,9 +609,51 @@ HalpInitializePICs(IN BOOLEAN EnableInterrupts)
     HalpRegisterVector(IDT_INTERNAL, 0, APC_VECTOR, APC_LEVEL);
     HalpRegisterVector(IDT_INTERNAL, 0, DISPATCH_VECTOR, DISPATCH_LEVEL);
 
-    /* Restore interrupt state */
-    if (EnableInterrupts) EFlags |= EFLAGS_INTERRUPT_MASK;
+    /* Do NOT restore IF here. STI with the frame half-torn-down
+     * (epilogue) delivers the first pending IRQ onto a broken stack ->
+     * handler returns to garbage -> GPF. Leave IF=0; the kernel
+     * enables it later with an intact frame. */
+    UNREFERENCED_PARAMETER(EnableInterrupts);
+    EFlags &= ~EFLAGS_INTERRUPT_MASK;
     __writeeflags(EFlags);
+}
+
+
+/* SPURIOUS + IPI TRAPS *******************************************************/
+
+VOID
+FASTCALL
+HalpSpuriousInterruptHandler(IN PKTRAP_FRAME TrapFrame)
+{
+    /* Enter trap (sets up the frame the exit path validates,
+     * same discipline as the clock ISR). */
+    KiEnterInterruptTrap(TrapFrame);
+
+    KiEoiHelper(TrapFrame);
+}
+
+VOID
+FASTCALL
+HalpIpiInterruptHandler(IN PKTRAP_FRAME TrapFrame)
+{
+    KIRQL Irql;
+
+    /* Enter trap */
+    KiEnterInterruptTrap(TrapFrame);
+
+    /* Start the interrupt */
+    if (!HalBeginSystemInterrupt(IPI_LEVEL, APIC_IPI_VECTOR, &Irql))
+    {
+        /* Spurious, just end the interrupt */
+        KiEoiHelper(TrapFrame);
+        return;
+    }
+
+    /* Dispatch to the kernel's generic (exported) IPI service routine */
+    KiIpiServiceRoutine(TrapFrame, NULL);
+
+    /* End the interrupt */
+    KiEndInterrupt(Irql, TrapFrame);
 }
 
 
@@ -700,11 +807,12 @@ HalEnableSystemInterrupt(
         return (ReDirReg.Vector == Vector);
     }
 
-    /* Set up the redirection entry */
+    /* Set up the redirection entry: Fixed/Physical, routed across
+     * CPUs (10/11/14/15 stay on the BSP, see helper). */
     ReDirReg.Vector = Vector;
     ReDirReg.MessageType = APIC_MT_Fixed;
     ReDirReg.DestinationMode = APIC_DM_Physical;
-    ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
+    ReDirReg.Destination = HalpRoundRobinLapicId(Index);
     ReDirReg.TriggerMode = (InterruptMode == LevelSensitive) ?
         APIC_TGM_Level : APIC_TGM_Edge;
     ReDirReg.Mask = FALSE;
@@ -757,12 +865,6 @@ HalBeginSystemInterrupt(
         IOAPIC_REDIRECTION_REGISTER RedirReg;
         UCHAR Index;
 
-        /* It is not, set the real Irql in the TPR! */
-        ApicWrite(APIC_TPR, IrqlToTpr(CurrentIrql));
-
-        /* Save the new hard IRQL in the IRR field */
-        KeGetPcr()->IRR = CurrentIrql;
-
         /* End this interrupt */
         ApicSendEOI();
 
@@ -786,6 +888,15 @@ HalBeginSystemInterrupt(
             /* Re-request the interrupt to be handled later */
             ApicRequestSelfInterrupt(Vector, APIC_TGM_Edge);
        }
+
+        /* Raise TPR only AFTER the send: requested with TPR still low,
+         * the IRR accepts it; once raised it stays pending until soft
+         * lowers, then the ISR runs. Raising first risks the IRR never
+         * accepting the re-request (lost interrupt). */
+        ApicWrite(APIC_TPR, IrqlToTpr(CurrentIrql));
+
+        /* Save the new hard IRQL in the IRR field */
+        KeGetPcr()->IRR = CurrentIrql;
 
         /* Pretend it was a spurious interrupt */
         return FALSE;
@@ -812,6 +923,13 @@ HalEndSystemInterrupt(
 {
     /* Send an EOI */
     ApicSendEOI();
+
+    /* EOI the PIC too (dual-safe). On q35, device IRQs arrive via
+     * PIC/ExtINT (LVT0) but nobody EOIs the PIC (APIC only): the ISR
+     * stays stuck and every later IRQ from the same PIC is lost.
+     * Nonspecific EOI to inactive PICs is a no-op (safe). */
+    __outbyte(0xA0, 0x20);
+    __outbyte(0x20, 0x20);
 
     /* Restore the old IRQL */
     ApicLowerIrql(OldIrql);
