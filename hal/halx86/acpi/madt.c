@@ -32,6 +32,12 @@
 #endif // _MSC_VER
 #endif // DBG && 0
 
+/* MADT polarity/trigger per ISA IRQ (raw IntiFlags, 0-15).
+ * Explicit values override the driver-supplied Mode when programming
+ * the IOAPIC RTE (board wiring wins); conforms (0) keeps the driver. */
+UCHAR HalpPicPolarity[16] = {0};
+UCHAR HalpPicTrigger[16] = {0};
+
 /* GLOBALS ********************************************************************/
 
 HALP_APIC_INFO_TABLE HalpApicInfoTable;
@@ -219,7 +225,12 @@ HalpParseApicTables(
 
                 // Note: GlobalIrq is not validated in any way (yet).
                 HalpPicVectorRedirect[InterruptOverride->SourceIrq] = InterruptOverride->GlobalIrq;
-                // TODO: What about 'InterruptOverride->IntiFlags'?
+                /* Store raw polarity/trigger for the RTE override.
+                 * 0 = conforms (keep driver Mode); otherwise explicit. */
+                HalpPicPolarity[InterruptOverride->SourceIrq] =
+                    (UCHAR)(InterruptOverride->IntiFlags & 0x3);
+                HalpPicTrigger[InterruptOverride->SourceIrq] =
+                    (UCHAR)((InterruptOverride->IntiFlags >> 2) & 0x3);
 
                 break;
             }

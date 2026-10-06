@@ -29,6 +29,14 @@ ULONG ApicVersion;
 UCHAR HalpVectorToIndex[256];
 extern PPROCESSOR_IDENTITY HalpProcessorIdentity;
 
+/* MADT override tables (strong definitions in madt.c when the ACPI
+ * component links; weak identity defaults here so HALs without ACPI
+ * still link and behave as before: identity routing, driver Mode). */
+__attribute__((weak)) ULONG HalpPicVectorRedirect[16] =
+    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+__attribute__((weak)) UCHAR HalpPicPolarity[16] = {0};
+__attribute__((weak)) UCHAR HalpPicTrigger[16] = {0};
+
 #ifndef _M_AMD64
 const UCHAR
 HalpIRQLtoTPR[32] =
@@ -817,6 +825,28 @@ HalEnableSystemInterrupt(
     ReDirReg.TriggerMode = (InterruptMode == LevelSensitive) ?
         APIC_TGM_Level : APIC_TGM_Edge;
     ReDirReg.Mask = FALSE;
+
+    /* Honor MADT interrupt overrides for ISA IRQs (board wiring wins
+     * over the driver-supplied Mode): find the SourceIrq whose Global
+     * maps to this RTE index and apply explicit polarity/trigger.
+     * Wrong trigger here means missed (hang) or storming (0x0F) IRQs;
+     * seen live on Q35+ (storm) and real PCH (silence). */
+    {
+        UCHAR _irq;
+        for (_irq = 0; _irq < 16; _irq++)
+        {
+            if (HalpPicVectorRedirect[_irq] != Index) continue;
+            if (HalpPicPolarity[_irq] == 1)
+                ReDirReg.Polarity = 0; /* active-high */
+            else if (HalpPicPolarity[_irq] == 3)
+                ReDirReg.Polarity = 1; /* active-low */
+            if (HalpPicTrigger[_irq] == 1)
+                ReDirReg.TriggerMode = APIC_TGM_Edge;
+            else if (HalpPicTrigger[_irq] == 3)
+                ReDirReg.TriggerMode = APIC_TGM_Level;
+            break;
+        }
+    }
 
     /* Write back the entry */
     ApicWriteIORedirectionEntry(Index, ReDirReg);
