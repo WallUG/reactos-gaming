@@ -44,9 +44,7 @@ HALP_APIC_INFO_TABLE HalpApicInfoTable;
 static PROCESSOR_IDENTITY HalpStaticProcessorIdentity[MAXIMUM_PROCESSORS];
 const PPROCESSOR_IDENTITY HalpProcessorIdentity = HalpStaticProcessorIdentity;
 
-#if 0
 extern ULONG HalpPicVectorRedirect[16];
-#endif
 
 /* FUNCTIONS ******************************************************************/
 
@@ -206,10 +204,13 @@ HalpParseApicTables(
                     return;
                 }
 
-#if 1
-                // TODO: Implement it.
-#else // TODO: Is that correct?
-                if (InterruptOverride->SourceIrq > _countof(HalpPicVectorRedirect))
+                /* Honor MADT interrupt overrides (ISA Bus): the board
+                 * rewires SourceIrq to GlobalIrq (e.g. SCI/IRQ9). Without
+                 * this, SCI and a device share IRQ9 -> resource conflict,
+                 * level storm, nested ISR acquires -> 0x0F. Validated;
+                 * IntiFlags (polarity/trigger) still TODO (drivers supply
+                 * Mode, correct for their devices). */
+                if (InterruptOverride->SourceIrq >= _countof(HalpPicVectorRedirect))
                 {
                     DPRINT01("Invalid SourceIrq: %p, %u\n",
                              InterruptOverride, InterruptOverride->SourceIrq);
@@ -219,7 +220,6 @@ HalpParseApicTables(
                 // Note: GlobalIrq is not validated in any way (yet).
                 HalpPicVectorRedirect[InterruptOverride->SourceIrq] = InterruptOverride->GlobalIrq;
                 // TODO: What about 'InterruptOverride->IntiFlags'?
-#endif
 
                 break;
             }

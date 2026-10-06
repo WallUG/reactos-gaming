@@ -232,14 +232,15 @@ FORCEINLINE
 VOID
 ApicSetIrql(KIRQL Irql)
 {
-#ifdef _M_AMD64
-    __writecr8(Irql);
-#elif defined(APIC_LAZY_IRQL)
+    /* Always program the hardware TPR on raise. The lazy scheme used
+     * to update only the PCR here, leaving hardware TPR at 0: nothing
+     * was ever masked, so a level IRQ re-fired inside its own ISR
+     * (same spinlock held -> 0x0F SPIN_LOCK_ALREADY_OWNED, seen live
+     * with atapi on QEMU) and on SMP IPIs/timers stormed into critical
+     * sections. MMIO write cost (~100ns) is irrelevant vs correctness.
+     * Lower keeps its lazy sweep (harmless when already in sync). */
     __writefsbyte(FIELD_OFFSET(KPCR, Irql), Irql);
-#else
-    /* Convert IRQL and write the TPR */
     ApicWrite(APIC_TPR, IrqlToTpr(Irql));
-#endif
 }
 #define ApicRaiseIrql ApicSetIrql
 
