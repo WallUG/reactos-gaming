@@ -274,6 +274,20 @@ i8042ConnectKeyboardInterrupt(
     TRACE_(I8042PRT, "i8042ConnectKeyboardInterrupt()\n");
 
     PortDeviceExtension = DeviceExtension->Common.PortDeviceExtension;
+    if (!PortDeviceExtension)
+    {
+        /* No FDO linkage (class-driven PnP on port-less machines):
+         * fail instead of #PF on the wild pointer (seen as 0x7E via
+         * mouclass->i8042Pnp, fault in i8042Write below). */
+        WARN_(I8042PRT, "no port device extension\n");
+        return STATUS_NO_SUCH_DEVICE;
+    }
+
+    /* The linkage above can also be non-NULL garbage (stale pool on
+     * machines without PS/2): guard the whole connect with SEH so
+     * any #PF becomes a clean failure instead of a 0x7E. */
+    _SEH2_TRY
+    {
 
     // Enable keyboard clock line
     i8042Write(PortDeviceExtension, PortDeviceExtension->ControlPort, KBD_CLK_ENABLE);
@@ -310,7 +324,15 @@ i8042ConnectKeyboardInterrupt(
     if (DirqlMax == PortDeviceExtension->KeyboardInterrupt.Dirql)
         PortDeviceExtension->HighestDIRQLInterrupt = PortDeviceExtension->KeyboardInterrupt.Object;
     PortDeviceExtension->Flags |= KEYBOARD_INITIALIZED;
-    return STATUS_SUCCESS;
+    Status = STATUS_SUCCESS;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        WARN_(I8042PRT, "exception connecting keyboard interrupt\n");
+        Status = STATUS_NO_SUCH_DEVICE;
+    }
+    _SEH2_END;
+    return Status;
 }
 
 static NTSTATUS
@@ -328,6 +350,17 @@ i8042ConnectMouseInterrupt(
         return Status;
 
     PortDeviceExtension = DeviceExtension->Common.PortDeviceExtension;
+    if (!PortDeviceExtension)
+    {
+        /* No FDO linkage (class-driven PnP on port-less machines):
+         * fail instead of #PF on the wild pointer (see keyboard). */
+        WARN_(I8042PRT, "no port device extension\n");
+        return STATUS_NO_SUCH_DEVICE;
+    }
+    /* Guard the whole connect with SEH like the keyboard path: a
+     * non-NULL garbage linkage #PFs the same way. */
+    _SEH2_TRY
+    {
     DirqlMax = MAX(
         PortDeviceExtension->KeyboardInterrupt.Dirql,
         PortDeviceExtension->MouseInterrupt.Dirql);
@@ -373,6 +406,13 @@ cleanup:
             PortDeviceExtension->HighestDIRQLInterrupt = PortDeviceExtension->KeyboardInterrupt.Object;
         }
     }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        WARN_(I8042PRT, "exception connecting mouse interrupt\n");
+        Status = STATUS_NO_SUCH_DEVICE;
+    }
+    _SEH2_END;
     return Status;
 }
 
