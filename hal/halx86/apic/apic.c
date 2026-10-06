@@ -848,8 +848,33 @@ HalEnableSystemInterrupt(
         }
     }
 
-    /* Write back the entry */
+    /* Write back the entry. Mask first: the RTE is two 32-bit MMIO
+     * writes (non-atomic); an AP taking this IRQ between them vectors
+     * through a torn entry (mixed old/new vector/dest -> wild jump on
+     * QEMU/flash, silent hang on HW when BSP then waits for the dead
+     * AP). Masked RTEs latch (level re-fires, edge may lose one during
+     * PnP only); pending IRQs fire right after unmask on the full
+     * entry. Seen live: reset right after idx11 programming, hang
+     * after its re-programming. */
+    ReDirReg.Mask = TRUE;
     ApicWriteIORedirectionEntry(Index, ReDirReg);
+    ReDirReg.Mask = FALSE;
+
+    /* Write back the entry (unmasked) */
+    ApicWriteIORedirectionEntry(Index, ReDirReg);
+
+    /* TEMP-DEBUG IRQ routing hunt: dump every programmed RTE (compare
+     * with board MADT on real HW; wrong trigger/dest/mask hangs device
+     * completion waits). Revert after test. */
+    {
+        IOAPIC_REDIRECTION_REGISTER _rd;
+        _rd = ApicReadIORedirectionEntry(Index);
+        DbgPrint("RTEDBG idx %02u vec %02x trig %s pol %s dst %02x mask %u\n",
+                 (unsigned)Index, (unsigned)Vector,
+                 _rd.TriggerMode ? "level" : "edge",
+                 _rd.Polarity ? "low" : "high",
+                 (unsigned)_rd.Destination, (unsigned)_rd.Mask);
+    }
 
     return TRUE;
 }
