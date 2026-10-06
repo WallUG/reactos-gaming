@@ -355,27 +355,21 @@ KiVerifyCpuFeatures(PKPRCB Prcb)
 {
     CPU_INFO CpuInfo;
 
-    // 1. Check CPUID support
-    ULONG EFlags = __readeflags();
-
-    /* XOR out the ID bit and update EFlags */
-    ULONG NewEFlags = EFlags ^ EFLAGS_ID;
-    __writeeflags(NewEFlags);
-
-    /* Get them back and see if they were modified */
-    NewEFlags = __readeflags();
-
-    if (NewEFlags == EFlags)
-    {
-        /* The modification did not work, so CPUID is not supported. */
-        KeBugCheckEx(UNSUPPORTED_PROCESSOR, 0x1, 0, 0, 0);
-    }
-    else
-    {
-        /* CPUID is supported. Set the ID Bit again. */
-        EFlags |= EFLAGS_ID;
-        __writeeflags(EFlags);
-    }
+    // 1. CPUID support is assumed: every supported processor (and QEMU's
+    // qemu32) has it, and KiGetFeatureBits below executes CPUID
+    // unconditionally anyway. The classic EFLAGS.ID toggle probe is
+    // intentionally gone: its __writeeflags(POPF) with the ID bit
+    // flipped observably sets EFLAGS.VM on KVM/qemu32 (leaked V86
+    // mode poisons every later pushf/popf save/restore and ends in a
+    // #GP inside HalpInitializePICs), while providing no signal on
+    // CPUs that matter (a missing CPUID would fault inside
+    // KiGetFeatureBits regardless of this check). Just make sure the
+    // ID bit is set (its final state with the old probe) without
+    // ever clearing it: POPF with a VM-free image cannot leak V86.
+    // Mask V86 explicitly so that even a leaked VM bit arriving here
+    // (e.g. from firmware) is cleared at the earliest point instead
+    // of being propagated by every later EFLAGS save/restore.
+    __writeeflags((__readeflags() | EFLAGS_ID) & ~EFLAGS_V86_MASK);
 
     /* Peform CPUID 0 to see if CPUID 1 is supported */
     KiCpuId(&CpuInfo, 0);
