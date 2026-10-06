@@ -372,9 +372,12 @@ i8042KbdDpcRoutine(
 	/* Validate that the callback didn't change the Irql. */
 	ASSERT(KeGetCurrentIrql() == Irql);
 
+	if (PortDeviceExtension->HighestDIRQLInterrupt)
+	{
 	Irql = KeAcquireInterruptSpinLock(PortDeviceExtension->HighestDIRQLInterrupt);
 	DeviceExtension->KeysInBuffer -= KeysTransferred;
 	KeReleaseInterruptSpinLock(PortDeviceExtension->HighestDIRQLInterrupt, Irql);
+	}
 }
 
 /*

@@ -482,15 +482,27 @@ StartProcedure(
         }
 
         /* Start the mouse */
-        Irql = KeAcquireInterruptSpinLock(DeviceExtension->HighestDIRQLInterrupt);
-        /* HACK: the mouse has already been reset in i8042DetectMouse. This second
-           reset prevents some touchpads/mice from working (Dell D531, D600).
-           See CORE-6901 */
-        if (!(i8042HwFlags & FL_INITHACK))
+        if (!DeviceExtension->HighestDIRQLInterrupt)
         {
-            i8042IsrWritePort(DeviceExtension, MOU_CMD_RESET, CTRL_WRITE_MOUSE);
+            /* No PS/2 hardware (or interrupt never connected): the
+             * flags above can claim progress while the interrupt is
+             * absent (mouclass PnP on port-less machines); acquiring
+             * a NULL/garbage interrupt #PFs (seen as 0x7E via
+             * mouclass->i8042Pnp). Skip gracefully like keyboard.c. */
+            WARN_(I8042PRT, "no mouse interrupt, skipping start\n");
         }
-        KeReleaseInterruptSpinLock(DeviceExtension->HighestDIRQLInterrupt, Irql);
+        else
+        {
+            Irql = KeAcquireInterruptSpinLock(DeviceExtension->HighestDIRQLInterrupt);
+            /* HACK: the mouse has already been reset in i8042DetectMouse. This second
+               reset prevents some touchpads/mice from working (Dell D531, D600).
+               See CORE-6901 */
+            if (!(i8042HwFlags & FL_INITHACK))
+            {
+                i8042IsrWritePort(DeviceExtension, MOU_CMD_RESET, CTRL_WRITE_MOUSE);
+            }
+            KeReleaseInterruptSpinLock(DeviceExtension->HighestDIRQLInterrupt, Irql);
+        }
     }
 
     return Status;

@@ -336,6 +336,13 @@ i8042StartPacket(
 	KIRQL Irql;
 	NTSTATUS Status;
 
+	if (!DeviceExtension->HighestDIRQLInterrupt)
+	{
+		/* No interrupt (no PS/2 hardware): fail instead of #PF on a
+		 * NULL/garbage interrupt object (see pnp.c StartProcedure). */
+		return STATUS_NO_SUCH_DEVICE;
+	}
+
 	Irql = KeAcquireInterruptSpinLock(DeviceExtension->HighestDIRQLInterrupt);
 
 	if (DeviceExtension->Packet.State != Idle)

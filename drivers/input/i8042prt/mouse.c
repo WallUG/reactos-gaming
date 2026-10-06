@@ -336,6 +336,8 @@ i8042MouDpcRoutine(
 		DeviceExtension->MouseBuffer + MouseInBufferCopy,
 		&MouseTransferred);
 
+	if (PortDeviceExtension->HighestDIRQLInterrupt)
+	{
 	Irql = KeAcquireInterruptSpinLock(PortDeviceExtension->HighestDIRQLInterrupt);
 	DeviceExtension->MouseInBuffer -= MouseTransferred;
 	if (DeviceExtension->MouseInBuffer)
@@ -344,6 +346,7 @@ i8042MouDpcRoutine(
 			DeviceExtension->MouseBuffer + MouseTransferred,
 			DeviceExtension->MouseInBuffer * sizeof(MOUSE_INPUT_DATA));
 	KeReleaseInterruptSpinLock(PortDeviceExtension->HighestDIRQLInterrupt, Irql);
+	}
 }
 
 /* This timer DPC will be called when the mouse reset times out.
@@ -368,6 +371,16 @@ i8042DpcRoutineMouseTimeout(
 	__analysis_assume(DeferredContext != NULL);
 	DeviceExtension = DeferredContext;
 	PortDeviceExtension = DeviceExtension->Common.PortDeviceExtension;
+
+	if (!PortDeviceExtension->HighestDIRQLInterrupt)
+	{
+		/* No interrupt (no PS/2 hardware): just clear PRESENT,
+		 * no lock to hold (see pnp.c StartProcedure). */
+		WARN_(I8042PRT, "Mouse initialization timeout, no interrupt! (substate %x)\n",
+			DeviceExtension->MouseResetState);
+		PortDeviceExtension->Flags &= ~MOUSE_PRESENT;
+		return;
+	}
 
 	Irql = KeAcquireInterruptSpinLock(PortDeviceExtension->HighestDIRQLInterrupt);
 
