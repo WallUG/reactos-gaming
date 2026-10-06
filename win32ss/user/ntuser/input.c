@@ -325,7 +325,7 @@ RawInputThreadMain(VOID)
             UserLeave();
         }
         else if (MouStatus != STATUS_PENDING)
-            ERR("Failed to read from mouse: %x.\n", MouStatus);
+            TRACE("Failed to read from mouse: %x.\n", MouStatus);
 
         /* Have we successed reading from keyboard? */
         if (NT_SUCCESS(KbdStatus) && KbdStatus != STATUS_PENDING)
@@ -343,7 +343,7 @@ RawInputThreadMain(VOID)
             UserLeave();
         }
         else if (KbdStatus != STATUS_PENDING)
-            ERR("Failed to read from keyboard: %x.\n", KbdStatus);
+            TRACE("Failed to read from keyboard: %x.\n", KbdStatus);
     }
 
     if (ghMouseDevice)
