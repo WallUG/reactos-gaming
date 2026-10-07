@@ -204,12 +204,21 @@ KeStartAllProcessors(VOID)
             break;
         }
 
-        // And wait for it to start
-        while (KeLoaderBlock->Prcb != 0)
+        // And wait for it to start (bounded: a dead AP used to hang
+        // the boot mute forever; time out and continue degraded).
         {
-            //TODO: Add a time out so we don't wait forever
-            KeMemoryBarrier();
-            YieldProcessor();
+            ULONG _spin = 0;
+            while (KeLoaderBlock->Prcb != 0)
+            {
+                KeMemoryBarrier();
+                YieldProcessor();
+                if (++_spin > 10000000UL)
+                {
+                    DPRINT1("KeStartAllProcessors: CPU%lu never signaled, continuing degraded\n",
+                            ProcessorCount);
+                    break;
+                }
+            }
         }
     }
 

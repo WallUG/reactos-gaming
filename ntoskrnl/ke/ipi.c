@@ -260,8 +260,24 @@ KeIpiGenericCall(IN PKIPI_BROADCAST_WORKER Function,
         /* Sanity check */
         ASSERT(Prcb == KeGetCurrentPrcb());
 
-        /* FIXME: TODO */
-        ASSERTMSG("Not yet implemented\n", FALSE);
+        /* Every target clears its own bit when done (see
+         * KiIpiSignalPacketDone/KiIpiServiceRoutine). Bounded like
+         * KeFlushEntireTb: never hang mute on a dead target. */
+        {
+            ULONG _spin = 0;
+            while (Prcb->TargetSet != 0)
+            {
+                YieldProcessor();
+                KeMemoryBarrierWithoutFence();
+                if (++_spin > 10000000UL)
+                {
+                    DbgPrint("KeIpiGenericCall: target(s) %lx never acked, continuing degraded\n",
+                             (ULONG)Prcb->TargetSet);
+                    Prcb->TargetSet = 0;
+                    break;
+                }
+            }
+        }
     }
 #endif
 

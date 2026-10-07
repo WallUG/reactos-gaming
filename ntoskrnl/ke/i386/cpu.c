@@ -1538,8 +1538,28 @@ KeFlushEntireTb(IN BOOLEAN Invalid,
         /* Sanity check */
         ASSERT(Prcb == KeGetCurrentPrcb());
 
-        /* FIXME: TODO */
-        ASSERTMSG("Not yet implemented\n", FALSE);
+        /* Every target clears its own bit when done (see
+         * KiIpiSignalPacketDone/KiIpiServiceRoutine). Bounded: if a
+         * target died (wild AP jump) we would hang mute forever (seen
+         * on real HW: silence after RTEDBG idx11). After 10s, force
+         * the bits clear and continue degraded (UP-style) instead of
+         * hanging; a stale TLB on a dead/idle AP is harmless for boot
+         * and beats a hung machine. */
+        {
+            ULONG _spin = 0;
+            while (Prcb->TargetSet != 0)
+            {
+                YieldProcessor();
+                KeMemoryBarrierWithoutFence();
+                if (++_spin > 10000000UL)
+                {
+                    DPRINT1("KeFlushEntireTb: target(s) %lx never acked, continuing degraded\n",
+                            (ULONG)Prcb->TargetSet);
+                    Prcb->TargetSet = 0;
+                    break;
+                }
+            }
+        }
     }
 #endif
 
