@@ -226,7 +226,7 @@ VOID
  * QEMU). Count per vector per tick; past the threshold, mask it and
  * shout once. The device goes silent (better than dead machine) and
  * the log names the stormer for a proper per-device fix. */
-#define ISR_STORM_THRESHOLD 10000
+#define ISR_STORM_THRESHOLD 1000
 volatile ULONG KiIsrStormTick[256] = {0};
 volatile LONG KiIsrStormCount[256] = {0};
 
