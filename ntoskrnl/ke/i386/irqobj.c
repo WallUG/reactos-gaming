@@ -218,26 +218,74 @@ VOID
     IN PKINTERRUPT Interrupt
 );
 
+/* Storm detection (SMP bring-up): a level line with no owner acking
+ * it re-fires inside its own ISR thousands of times per tick: nested
+ * frames overflow the interrupt stack -> triple-fault reset (seen on
+ * real HW right after idx11 was programmed), or 100% ISR livelock
+ * (silent hang), or nested same-lock 0x0F (seen with USB storms on
+ * QEMU). Count per vector per tick; past the threshold, mask it and
+ * shout once. The device goes silent (better than dead machine) and
+ * the log names the stormer for a proper per-device fix. */
+#define ISR_STORM_THRESHOLD 10000
+volatile ULONG KiIsrStormTick[256] = {0};
+volatile LONG KiIsrStormCount[256] = {0};
+
+FORCEINLINE
+BOOLEAN
+KiIsrStormCheck(IN UCHAR Vector)
+{
+    ULONG Tick = KeTickCount.LowPart;
+    ULONG Last = (ULONG)InterlockedExchange((PLONG)&KiIsrStormTick[Vector], (LONG)Tick);
+    LONG Count;
+
+    if (Last != Tick)
+    {
+        /* New tick: reset the counter, allow one grace ISR that sets it to 1 */
+        InterlockedExchange(&KiIsrStormCount[Vector], 1);
+        return FALSE;
+    }
+
+    Count = InterlockedIncrement(&KiIsrStormCount[Vector]);
+    if (Count == ISR_STORM_THRESHOLD)
+    {
+        /* Storm confirmed: mask it (level stays asserted, no more
+         * entries) and report once. Ownerless line or un-acked device;
+         * needs a per-device follow-up, but boot continues. */
+        HalDisableSystemInterrupt(Vector, 0);
+        DbgPrint("ISRSTORM vector %02x masked after %lu hits in one tick (ownerless/shared line?)\n",
+                 (unsigned)Vector, (unsigned long)Count);
+    }
+    return (Count >= ISR_STORM_THRESHOLD);
+}
+
 VOID
 FASTCALL
 KiInterruptDispatch(IN PKTRAP_FRAME TrapFrame,
                     IN PKINTERRUPT Interrupt)
 {
-    KIRQL OldIrql;
+    KIRQL OldIrql = 0;
 
     /* Increase interrupt count */
     KeGetCurrentPrcb()->InterruptCount++;
+
+    /* Storm guard: do not even enter a storming vector (its stack is
+     * already thousands deep elsewhere or about to be). */
+    if (KiIsrStormCheck(Interrupt->Vector))
+    {
+        KiExitInterrupt(TrapFrame, OldIrql, TRUE);
+        return;
+    }
 
     /* Begin the interrupt, making sure it's not spurious */
     if (HalBeginSystemInterrupt(Interrupt->SynchronizeIrql,
                                 Interrupt->Vector,
                                 &OldIrql))
     {
-        /* Acquire interrupt lock */
-        KxAcquireSpinLock(Interrupt->ActualLock);
+            /* Acquire interrupt lock */
+            KxAcquireSpinLock(Interrupt->ActualLock);
 
-        /* Call the ISR */
-        Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+            /* Call the ISR */
+            Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
 
         /* Release interrupt lock */
         KxReleaseSpinLock(Interrupt->ActualLock);
@@ -255,14 +303,22 @@ KiInterruptDispatch(IN PKTRAP_FRAME TrapFrame,
 VOID
 FASTCALL
 KiChainedDispatch(IN PKTRAP_FRAME TrapFrame,
-                  IN PKINTERRUPT Interrupt)
+                   IN PKINTERRUPT Interrupt)
 {
-    KIRQL OldIrql, OldInterruptIrql = 0;
+    KIRQL OldIrql = 0, OldInterruptIrql = 0;
     BOOLEAN Handled;
     PLIST_ENTRY NextEntry, ListHead;
 
     /* Increase interrupt count */
     KeGetCurrentPrcb()->InterruptCount++;
+
+    /* Storm guard (see KiInterruptDispatch): shared level lines that
+     * nobody acks re-fire into themselves here. */
+    if (KiIsrStormCheck(Interrupt->Vector))
+    {
+        KiExitInterrupt(TrapFrame, OldIrql, TRUE);
+        return;
+    }
 
     /* Begin the interrupt, making sure it's not spurious */
     if (HalBeginSystemInterrupt(Interrupt->Irql,
