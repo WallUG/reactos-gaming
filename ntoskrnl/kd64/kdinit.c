@@ -92,7 +92,11 @@ KdpPrintBanner(VOID)
     SIZE_T MemSizeMBs = KdpGetMemorySizeInMBs(KeLoaderBlock);
 
     DPRINT1("-----------------------------------------------------\n");
-    DPRINT1("ReactOS " KERNEL_VERSION_STR " (Build " KERNEL_VERSION_BUILD_STR ") (Commit " KERNEL_VERSION_COMMIT_HASH ")\n");
+    /* NOTE (smp-port): no Commit hash here on purpose. The hash came
+     * from cmake configure time and lied whenever the tree was rebuilt
+     * without reconfiguring (burned five identical-looking ISOs that
+     * were different). Build date/time always reflects the binary. */
+    DPRINT1("ReactOS " KERNEL_VERSION_STR " (Build " KERNEL_VERSION_BUILD_STR ", built " __DATE__ " " __TIME__ ")\n");
     DPRINT1("%u System Processor [%u MB Memory]\n", KeNumberProcessors, MemSizeMBs);
 
     if (KeLoaderBlock)
