@@ -482,6 +482,50 @@ IopInitiatePnpIrp(IN PDEVICE_OBJECT DeviceObject,
                   IN PIO_STACK_LOCATION Stack OPTIONAL)
 {
     IO_STACK_LOCATION IoStackLocation;
+    PDRIVER_OBJECT DriverObject;
+
+    /* AGGRESSIVE SMP/HW bring-up guard (real HW dies here): devnodes
+     * outlive their drivers (sacdrv/buslogic/legide fail and are
+     * deleted+unloaded, but PnP keeps sending them IRPs -> executes
+     * freed image -> 0x7E/reads NULL+1, "Potentially unloaded driver").
+     * Probe the dispatch entry we are about to call (SEH covers fully
+     * freed objects). Do NOT key on DriverSection (boot drivers never
+     * have one and are legit). Fail clean instead of crashing. */
+    DriverObject = NULL;
+    _SEH2_TRY
+    {
+        DriverObject = DeviceObject->DriverObject;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        DriverObject = NULL;
+    }
+    _SEH2_END;
+    if (!DriverObject)
+    {
+        DPRINT1("IopInitiatePnpIrp: no driver object for %p, failing %u\n",
+                DeviceObject, (unsigned)MinorFunction);
+        IoStatusBlock->Status = STATUS_NO_SUCH_DEVICE;
+        IoStatusBlock->Information = 0;
+        return STATUS_NO_SUCH_DEVICE;
+    }
+    _SEH2_TRY
+    {
+        /* Touch the dispatch table we are about to call through. If
+         * the image is gone (unmapped), this faults and we fail clean
+         * instead of executing freed memory. Volatile read only. */
+        volatile PVOID _drv = (PVOID)DriverObject->MajorFunction[IRP_MJ_PNP];
+        (void)_drv;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        DPRINT1("IopInitiatePnpIrp: driver dispatch stale, failing %u\n",
+                (unsigned)MinorFunction);
+        IoStatusBlock->Status = STATUS_NO_SUCH_DEVICE;
+        IoStatusBlock->Information = 0;
+        return STATUS_NO_SUCH_DEVICE;
+    }
+    _SEH2_END;
 
     /* Fill out the stack information */
     RtlZeroMemory(&IoStackLocation, sizeof(IO_STACK_LOCATION));
