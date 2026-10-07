@@ -102,6 +102,16 @@ IopDeleteDriver(IN PVOID ObjectBody)
     {
         /* Unload it */
         MmUnloadSystemImage(DriverObject->DriverSection);
+        DriverObject->DriverSection = NULL;
+
+        /* AGGRESSIVE SMP/HW bring-up (stale TLB executes freed image):
+         * PnP devnodes outlive failed drivers and keep calling into
+         * the unloaded image (0x7E + "Potentially unloaded driver" on
+         * real HW via IopQueryDeviceCapabilities). Probes can pass on
+         * stale TLB entries, so flush all CPUs: afterwards any touch
+         * of the freed image faults cleanly (caught by the SEH guard
+         * in IopInitiatePnpIrp) instead of executing garbage. */
+        KeFlushEntireTb(TRUE, TRUE);
     }
 
     /* Check if it has a name */
