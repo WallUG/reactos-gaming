@@ -269,10 +269,22 @@ KiInterruptDispatch(IN PKTRAP_FRAME TrapFrame,
     KeGetCurrentPrcb()->InterruptCount++;
 
     /* Storm guard: do not even enter a storming vector (its stack is
-     * already thousands deep elsewhere or about to be). */
+     * already thousands deep elsewhere or about to be). Still run
+     * Begin/End so the LAPIC gets its EOI (no stuck ISR bit blocking
+     * the priority class) and IRQL accounting stays exact -- just
+     * never call the ISR. The RTE is already masked by the check. */
     if (KiIsrStormCheck(Interrupt->Vector))
     {
-        KiExitInterrupt(TrapFrame, OldIrql, TRUE);
+        if (HalBeginSystemInterrupt(Interrupt->SynchronizeIrql,
+                                    Interrupt->Vector,
+                                    &OldIrql))
+        {
+            KiExitInterrupt(TrapFrame, OldIrql, FALSE);
+        }
+        else
+        {
+            KiExitInterrupt(TrapFrame, OldIrql, TRUE);
+        }
         return;
     }
 
@@ -313,10 +325,20 @@ KiChainedDispatch(IN PKTRAP_FRAME TrapFrame,
     KeGetCurrentPrcb()->InterruptCount++;
 
     /* Storm guard (see KiInterruptDispatch): shared level lines that
-     * nobody acks re-fire into themselves here. */
+     * nobody acks re-fire into themselves here. Same Begin/End
+     * discipline as above: EOI + exact IRQL restore, no ISR. */
     if (KiIsrStormCheck(Interrupt->Vector))
     {
-        KiExitInterrupt(TrapFrame, OldIrql, TRUE);
+        if (HalBeginSystemInterrupt(Interrupt->Irql,
+                                    Interrupt->Vector,
+                                    &OldIrql))
+        {
+            KiExitInterrupt(TrapFrame, OldIrql, FALSE);
+        }
+        else
+        {
+            KiExitInterrupt(TrapFrame, OldIrql, TRUE);
+        }
         return;
     }
 
