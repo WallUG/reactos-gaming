@@ -534,7 +534,7 @@ extern WORK_QUEUE_ITEM KdpTimeSlipWorkItem;
 extern LONG KdpTimeSlipPending;
 extern PKEVENT KdpTimeSlipEvent;
 extern KSPIN_LOCK KdpTimeSlipEventLock;
-extern BOOLEAN KdpPortLocked;
+extern BOOLEAN KdpPortLocked[MAXIMUM_PROCESSORS];
 extern BOOLEAN KdpControlCPressed;
 extern BOOLEAN KdpContextSent;
 extern KSPIN_LOCK KdpDebuggerLock;

@@ -309,6 +309,26 @@ HalDisableSystemInterrupt(ULONG Vector,
   return;
 }
 
+VOID
+NTAPI
+HalRearmSystemInterrupt(ULONG Vector)
+{
+  ULONG irq;
+
+  /* Clear ONLY the mask bit (no reprogram). Self-healing for the
+   * kernel storm guard on driver connect. */
+  if (Vector < FIRST_DEVICE_VECTOR ||
+      Vector >= FIRST_DEVICE_VECTOR + NUMBER_DEVICE_VECTORS)
+  {
+    return;
+  }
+
+  irq = VECTOR2IRQ (Vector);
+  IOAPICUnmaskIrq (irq);
+
+  return;
+}
+
 
 BOOLEAN NTAPI
 HalEnableSystemInterrupt (ULONG Vector,

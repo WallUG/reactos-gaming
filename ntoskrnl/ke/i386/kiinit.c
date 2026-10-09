@@ -29,6 +29,15 @@ KSPIN_LOCK Ki486CompatibilityLock;
 ULONG ProcessCount;
 ULONGLONG BootCycles, BootCyclesEnd;
 
+/* mproc.c: snapshot de arranque por-AP (late-AP-proof). Layout identico
+ * al de mproc.c (Thread, KernelStack); el slot N solo lo lee el CPU N. */
+typedef struct _KI_AP_INIT
+{
+    PVOID Thread;
+    PVOID KernelStack;
+} KI_AP_INIT, *PKI_AP_INIT;
+KI_AP_INIT KiApInitBlock[32] = {{0}};
+
 /* FUNCTIONS *****************************************************************/
 
 CODE_SEG("INIT")
@@ -358,18 +367,19 @@ KiVerifyCpuFeatures(PKPRCB Prcb)
     // 1. CPUID support is assumed: every supported processor (and QEMU's
     // qemu32) has it, and KiGetFeatureBits below executes CPUID
     // unconditionally anyway. The classic EFLAGS.ID toggle probe is
-    // intentionally gone: its __writeeflags(POPF) with the ID bit
-    // flipped observably sets EFLAGS.VM on KVM/qemu32 (leaked V86
-    // mode poisons every later pushf/popf save/restore and ends in a
-    // #GP inside HalpInitializePICs), while providing no signal on
-    // CPUs that matter (a missing CPUID would fault inside
-    // KiGetFeatureBits regardless of this check). Just make sure the
-    // ID bit is set (its final state with the old probe) without
-    // ever clearing it: POPF with a VM-free image cannot leak V86.
-    // Mask V86 explicitly so that even a leaked VM bit arriving here
-    // (e.g. from firmware) is cleared at the earliest point instead
-    // of being propagated by every later EFLAGS save/restore.
-    __writeeflags((__readeflags() | EFLAGS_ID) & ~EFLAGS_V86_MASK);
+    // intentionally gone AND no POPF runs here at all: POPF with the ID
+    // bit changed observably sets EFLAGS.VM on KVM/qemu32 (racily;
+    // leaked V86 poisons every later pushf/popf and ends in wild
+    // jumps), and even a masked restore still executes POPF. ID stays
+    // as firmware left it (kernel never needs user-mode CPUID). If
+    // firmware itself leaked V86 (VM set at entry), clear it once,
+    // without touching ID: conditional POPF that only runs when
+    // actually leaked (normal path executes zero EFLAGS writers).
+    {
+        ULONG _ef = __readeflags();
+        if (_ef & EFLAGS_V86_MASK)
+            __writeeflags(_ef & ~EFLAGS_V86_MASK);
+    }
 
     /* Peform CPUID 0 to see if CPUID 1 is supported */
     KiCpuId(&CpuInfo, 0);
@@ -696,13 +706,22 @@ KiSystemStartupBootStack(VOID)
 {
     PKTHREAD Thread;
 
-    /* Initialize the kernel for the current CPU */
-    KiInitializeKernel(&KiInitialProcess.Pcb,
-                       (PKTHREAD)KeLoaderBlock->Thread,
-                       (PVOID)(KeLoaderBlock->KernelStack & ~3),
-                       (PKPRCB)__readfsdword(KPCR_PRCB),
-                       KeNumberProcessors - 1,
-                       KeLoaderBlock);
+    /* Initialize the kernel for the current CPU. Per-CPU data WITHOUT
+     * shared mutable state (late-AP-proof, ver KiSystemStartup): quienes
+     * somos sale de nuestro propio Prcb (FS), pila+thread de nuestro slot
+     * (slot 0 = BSP, publicado en su entrada). KeLoaderBlock sigue siendo
+     * el bloque del cargador (strings estables + mailbox de senal AP). */
+    {
+        PKPRCB _ApPrcb = (PKPRCB)__readfsdword(KPCR_PRCB);
+        ULONG _ApIdx = (ULONG)_ApPrcb->Number;
+        CCHAR _ApNum = (CCHAR)_ApIdx;
+        KiInitializeKernel(&KiInitialProcess.Pcb,
+                           (PKTHREAD)KiApInitBlock[_ApIdx].Thread,
+                           (PVOID)((ULONG_PTR)KiApInitBlock[_ApIdx].KernelStack & ~3),
+                           _ApPrcb,
+                           _ApNum,
+                           KeLoaderBlock);
+    }
 
     /* Set the priority of this thread to 0 */
     Thread = KeGetCurrentThread();
@@ -767,23 +786,55 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Boot cycles timestamp */
     BootCycles = __rdtsc();
 
-    /* Save the loader block and get the current CPU */
-    KeLoaderBlock = LoaderBlock;
+    /* Run early init with interrupts disabled: until the IDT is fully
+     * built (KeInitExceptions below), a pending IRQ (e.g. RTC tick)
+     * would vector into a half-written gate -> #GP -> double/triple
+     * fault reset, racy by tick phase. Nothing here needs IF (all
+     * waits are polling); IF comes back on later via the normal
+     * _enable() paths (idle, ExpInit). */
+    _disable();
+
+    /* Save the loader block and get the current CPU. The BSP (number
+     * 0) owns the globals; an AP -- possibly a LATE one waking minutes
+     * after the BSP moved on and launched siblings (which rewrote
+     * KeLoaderBlock/KeNumberProcessors) -- must use only its own data:
+     * our number lives stamped in our own Prcb, our stack+thread in our
+     * launch slot (written once by the BSP). Reading the globals here
+     * used to hand a late AP a sibling's number/stack/thread (cazado:
+     * 0xA (1,-1,2) con IF=0 desde aqui + cascada 0x7F/0x1E). */
     Cpu = KeNumberProcessors;
     if (!Cpu)
     {
-        /* If this is the boot CPU, set FS and the CPU Number*/
+        /* If this is the boot CPU, take the loader block, set FS and
+         * the CPU Number */
+        KeLoaderBlock = LoaderBlock;
         Ke386SetFs(KGDT_R0_PCR);
         __writefsdword(KPCR_PROCESSOR_NUMBER, Cpu);
 
         /* Set the initial stack and idle thread as well */
         LoaderBlock->KernelStack = (ULONG_PTR)P0BootStack;
         LoaderBlock->Thread = (ULONG_PTR)&KiInitialThread;
-    }
 
-    /* Save the initial thread and stack */
-    InitialStack = LoaderBlock->KernelStack;
-    InitialThread = (PKTHREAD)LoaderBlock->Thread;
+        /* Publish slot 0 so the boot-stack switch is uniform */
+        KiApInitBlock[0].Thread = (PVOID)&KiInitialThread;
+        KiApInitBlock[0].KernelStack = (PVOID)P0BootStack;
+
+        /* Save the initial thread and stack */
+        InitialStack = LoaderBlock->KernelStack;
+        InitialThread = (PKTHREAD)LoaderBlock->Thread;
+    }
+    else
+    {
+        /* AP: our FS already points at our own PCR (the trampoline loads
+         * our GDT); our number is stamped in our own Prcb, our
+         * stack+thread in our launch slot. Never touch KeLoaderBlock /
+         * KeNumberProcessors here (a sibling may own them by now). */
+        Cpu = ((PKPRCB)__readfsdword(KPCR_PRCB))->Number;
+
+        /* Save the initial thread and stack */
+        InitialStack = (ULONG_PTR)KiApInitBlock[(ULONG)(UCHAR)Cpu].KernelStack;
+        InitialThread = (PKTHREAD)KiApInitBlock[(ULONG)(UCHAR)Cpu].Thread;
+    }
 
     /* Clean the APC List Head */
     InitializeListHead(&InitialThread->ApcState.ApcListHead[KernelMode]);

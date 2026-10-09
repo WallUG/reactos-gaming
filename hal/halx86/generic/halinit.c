@@ -50,6 +50,7 @@ HalpGetParameters(
     }
 }
 
+
 /* FUNCTIONS *****************************************************************/
 
 VOID
@@ -122,16 +123,16 @@ HalInitSystem(
             KeBugCheckEx(MISMATCHED_HAL, 2, Prcb->BuildType, HalpBuildType, 0);
         }
 
-        /* Initialize ACPI */
+            /* Initialize ACPI */
         Status = HalpSetupAcpiPhase0(LoaderBlock);
-        if (!NT_SUCCESS(Status))
+            if (!NT_SUCCESS(Status))
         {
             KeBugCheckEx(ACPI_BIOS_ERROR, Status, 0, 0, 0);
         }
 
-        /* Initialize the PICs */
+            /* Initialize the PICs */
         HalpInitializePICs(TRUE);
-
+    
         /* Initialize CMOS lock */
         KeInitializeSpinLock(&HalpSystemHardwareLock);
 

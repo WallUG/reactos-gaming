@@ -1364,6 +1364,58 @@ PdoStartDevice(
         }
     }
 
+    /* SMP/APIC bring-up vs real HW (see FdoQueryBusRelations): the
+     * bus start silenced INTx on every function. Re-enable legacy
+     * INTx here only if this device actually uses a line-based IRQ;
+     * MSI/MSI-X users (CM_RESOURCE_INTERRUPT_MESSAGE) keep INTx
+     * disabled per spec best practice. */
+    {
+        BOOLEAN _lineBased = FALSE;
+        PCM_FULL_RESOURCE_DESCRIPTOR _fd = &RawResList->List[0];
+        ULONG _i, _ii;
+        USHORT _cmd = 0;
+        ULONG _sz;
+        for (_i = 0; _i < RawResList->Count; _i++, _fd = CmiGetNextResourceDescriptor(_fd))
+        {
+            for (_ii = 0; _ii < _fd->PartialResourceList.Count; _ii++)
+            {
+                PCM_PARTIAL_RESOURCE_DESCRIPTOR _pd =
+                    &_fd->PartialResourceList.PartialDescriptors[_ii];
+                if (_pd->Type == CmResourceTypeInterrupt &&
+                    !(_pd->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                {
+                    _lineBased = TRUE;
+                    break;
+                }
+            }
+            if (_lineBased) break;
+        }
+        _sz = HalGetBusDataByOffset(PCIConfiguration,
+                                    DeviceExtension->PciDevice->BusNumber,
+                                    DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                                    &_cmd,
+                                    FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                    sizeof(_cmd));
+        if (_sz == sizeof(_cmd))
+        {
+            if (_lineBased)
+                _cmd &= ~PCI_DISABLE_LEVEL_INTERRUPT;
+            else
+                _cmd |= PCI_DISABLE_LEVEL_INTERRUPT;
+            HalSetBusDataByOffset(PCIConfiguration,
+                                  DeviceExtension->PciDevice->BusNumber,
+                                  DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                                  &_cmd,
+                                  FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                  sizeof(_cmd));
+            DPRINT1("PCI: INTx %s on %02x:%02x.%x\n",
+                    _lineBased ? "enabled" : "left disabled",
+                    DeviceExtension->PciDevice->BusNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+        }
+    }
+
     Command = 0;
 
     DBGPRINT("pci!PdoStartDevice: Enabling command flags for PCI device 0x%x on bus 0x%x: ",

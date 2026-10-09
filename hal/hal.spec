@@ -19,6 +19,7 @@
 @ stdcall HalDisplayString(str)
 @ stdcall HalEnableSystemInterrupt(long long long)
 @ stdcall -arch=i386,arm HalEndSystemInterrupt(long long)
+@ stdcall -arch=i386 HalRearmSystemInterrupt(long)
 @ stdcall HalFlushCommonBuffer(long long long long long)
 @ stdcall HalFreeCommonBuffer(ptr long long long ptr long)
 @ stdcall HalGetAdapter(ptr ptr)

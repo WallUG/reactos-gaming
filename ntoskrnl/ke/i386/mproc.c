@@ -40,6 +40,23 @@ extern UCHAR KiNMITSS[];
  * proposito (ver comentario al final de KeStartAllProcessors). */
 PAPINFO KiApInfoBlock[32] = {0};
 
+/* Fase 5.x SMP: snapshot de arranque por-AP, a prueba de APs tardios.
+ * KeStartAllProcessors sigue degraded si un AP no senala a tiempo, pero
+ * el AP lanzado PUEDE despertar minutos despues (el INIT+SIPI ya se
+ * envio): si entonces lee KeLoaderBlock/KeNumberProcessors (reescritos
+ * por cada hermano lanzado despues), arranca con numero+pila+thread
+ * AJENOS y corrompe al hermano en marcha (cazado en HW real: 0xA
+ * (1,-1,2) con IF=0 desde KiSystemStartup + cascada 0x7F/0x1E a los
+ * ~10 min de boot). Cada slot se escribe UNA vez (BSP, antes de lanzar
+ * ese CPU) y solo lo lee ese CPU: sin condicion de carrera sea cual sea
+ * el retardo con que despierte. */
+typedef struct _KI_AP_INIT
+{
+    PVOID Thread;
+    PVOID KernelStack;
+} KI_AP_INIT, *PKI_AP_INIT;
+extern KI_AP_INIT KiApInitBlock[32];
+
 /* FUNCTIONS *****************************************************************/
 
 CODE_SEG("INIT")
@@ -196,6 +213,15 @@ KeStartAllProcessors(VOID)
         KeLoaderBlock->KernelStack = (ULONG_PTR)KernelStack;
         KeLoaderBlock->Prcb = (ULONG_PTR)&APInfo->Pcr.PrcbData;
         KeLoaderBlock->Thread = (ULONG_PTR)&APInfo->Thread;
+
+        /* Late-AP-proof: snapshot por-AP (ver comentario en la tabla).
+         * El mailbox de senal sigue siendo el global (el AP lo pone a 0
+         * al final de KiInitializeKernel y el BSP lo espera aqui). */
+        if (ProcessorCount < 32)
+        {
+            KiApInitBlock[ProcessorCount].Thread = (PVOID)&APInfo->Thread;
+            KiApInitBlock[ProcessorCount].KernelStack = KernelStack;
+        }
 
         // Start the CPU
         DPRINT("Attempting to Start a CPU with number: %lu\n", ProcessorCount);

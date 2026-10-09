@@ -804,6 +804,11 @@ LdrProcessDriverModule(PLDR_DATA_TABLE_ENTRY LdrEntry,
     /* Check the result of the imports resolution */
     if (!NT_SUCCESS(Status)) return Status;
 
+    /* TEMP-DIAG ghost-ISR hunt: name+base of every FreeLDR-builtin
+     * driver (this path is otherwise mute; maps ISR addresses like
+     * AFBFA3BA to owners). Revert after test. */
+    DbgPrint("LDRMOD %wZ at %p\n", &BaseName, DriverBase);
+
     /* Return */
     *ModuleObject = LdrEntry;
     return STATUS_SUCCESS;
@@ -837,6 +842,10 @@ IopInitializeBuiltinDriver(IN PLDR_DATA_TABLE_ENTRY BootLdrEntry)
      */
     IopDisplayLoadingMessage(ModuleName);
     InbvIndicateProgress();
+
+    /* TEMP-DIAG ghost-ISR hunt: name+base of every FreeLDR-builtin
+     * driver (maps ISR/caller addresses to owners). Revert after. */
+    DbgPrint("LDRMOD %wZ at %p\n", ModuleName, BootLdrEntry->DllBase);
 
     Buffer = ExAllocatePoolWithTag(PagedPool,
                                    ModuleName->Length + sizeof(UNICODE_NULL),

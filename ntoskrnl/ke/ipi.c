@@ -20,6 +20,15 @@ extern KSPIN_LOCK KiReverseStallIpiLock;
 
 #ifndef _M_AMD64
 
+/* Packet context for KeIpiGenericCall. Lives on the caller's stack:
+ * the caller does not return until every target has run the function
+ * (see the TargetSet wait in KeIpiGenericCall), so this is safe. */
+typedef struct _KIPI_GENERIC_CALL_CONTEXT
+{
+    PKIPI_BROADCAST_WORKER Function;
+    ULONG_PTR Argument;
+} KIPI_GENERIC_CALL_CONTEXT, *PKIPI_GENERIC_CALL_CONTEXT;
+
 VOID
 NTAPI
 KiIpiGenericCallTarget(IN PKIPI_CONTEXT PacketContext,
@@ -27,8 +36,14 @@ KiIpiGenericCallTarget(IN PKIPI_CONTEXT PacketContext,
                        IN PVOID Argument,
                        IN PVOID Count)
 {
-    /* FIXME: TODO */
-    ASSERTMSG("Not yet implemented\n", FALSE);
+    PKIPI_GENERIC_CALL_CONTEXT Context = (PKIPI_GENERIC_CALL_CONTEXT)PacketContext;
+
+    UNREFERENCED_PARAMETER(BroadcastFunction);
+    UNREFERENCED_PARAMETER(Argument);
+    UNREFERENCED_PARAMETER(Count);
+
+    /* Run the broadcast function with its argument */
+    Context->Function(Context->Argument);
 }
 
 VOID
@@ -36,8 +51,33 @@ FASTCALL
 KiIpiSend(IN KAFFINITY TargetProcessors,
           IN ULONG IpiRequest)
 {
-    /* FIXME: TODO */
-    ASSERTMSG("Not yet implemented\n", FALSE);
+    PKPRCB Prcb = KeGetCurrentPrcb();
+    PKPRCB TargetPrcb;
+    KAFFINITY TargetMask = 0;
+    KAFFINITY Current;
+    LONG i;
+
+    /* Set the request bit on every started target processor */
+    for (i = 0, Current = 1; i < 32; i++, Current <<= 1)
+    {
+        /* Skip processors outside the set (and never signal ourselves) */
+        if (!(TargetProcessors & Current)) continue;
+        if (Current == Prcb->SetMember) continue;
+
+        /* Skip processors that were never started */
+        TargetPrcb = (i < KeNumberProcessors) ? KiProcessorBlock[i] : NULL;
+        if (TargetPrcb == NULL) continue;
+
+        /* Raise the request and remember this target */
+        InterlockedBitTestAndSet((PLONG)&TargetPrcb->IpiFrozen, IpiRequest);
+        TargetMask |= Current;
+    }
+
+    /* Deliver all IPIs with a single request */
+    if (TargetMask != 0)
+    {
+        HalRequestIpi(TargetMask);
+    }
 }
 
 VOID
@@ -48,16 +88,99 @@ KiIpiSendPacket(IN KAFFINITY TargetProcessors,
                 IN ULONG_PTR Context,
                 IN PULONG Count)
 {
-    /* FIXME: TODO */
-    ASSERTMSG("Not yet implemented\n", FALSE);
+    PKPRCB Prcb = KeGetCurrentPrcb();
+    PKPRCB TargetPrcb;
+    KAFFINITY TargetMask = 0;
+    KAFFINITY Current;
+    LONG i;
+    ULONG TargetCount = 0;
+
+    UNREFERENCED_PARAMETER(BroadcastFunction);
+    UNREFERENCED_PARAMETER(Count);
+
+    /* Build the effective target set: only started processors,
+     * never ourselves (callers always run the local part directly) */
+    for (i = 0, Current = 1; i < 32; i++, Current <<= 1)
+    {
+        /* Skip processors outside the set (and never signal ourselves) */
+        if (!(TargetProcessors & Current)) continue;
+        if (Current == Prcb->SetMember) continue;
+
+        /* A processor without PRCB was never started: nothing to wait for */
+        TargetPrcb = (i < KeNumberProcessors) ? KiProcessorBlock[i] : NULL;
+        if (TargetPrcb == NULL) continue;
+
+        TargetMask |= Current;
+        TargetCount++;
+    }
+
+    /* No targets: callers still run their local part */
+    if (TargetCount == 0) return;
+
+    /* Publish the packet on our own PRCB. Targets pick it up through
+     * our Prcb (see KiIpiServiceRoutine), so it stays valid until every
+     * target has cleared its bit in TargetSet below. */
+    Prcb->TargetSet = TargetMask;
+    Prcb->WorkerRoutine = WorkerFunction;
+    Prcb->CurrentPacket[0] = (PVOID)Context;
+    Prcb->CurrentPacket[1] = (PVOID)(ULONG_PTR)TargetCount;
+    Prcb->CurrentPacket[2] = (PVOID)0;
+    KeMemoryBarrier();
+
+    /* Claim every target and raise the rendezvous request */
+    for (i = 0, Current = 1; i < 32; i++, Current <<= 1)
+    {
+        if (!(TargetMask & Current)) continue;
+
+        TargetPrcb = KiProcessorBlock[i];
+
+        /* Wait until any previous packet on the target is done.
+         * Bounded + loud (same discipline as the TargetSet waits): a
+         * stuck SignalDone (busy target that never clears, e.g. dead
+         * AP) hung the boot mute here on real HW. Diagnose loudly;
+         * we do NOT skip the target (its packet slot is genuinely
+         * busy) so this only reports. */
+        {
+            ULONG _spin = 0;
+            while (InterlockedCompareExchangeUL((PULONG)&TargetPrcb->SignalDone,
+                                                (ULONG)Prcb,
+                                                0) != 0)
+            {
+                YieldProcessor();
+                if (++_spin > 10000000UL)
+                {
+                    DbgPrint("KiIpiSendPacket: SignalDone of cpu %lu stuck %p, still waiting (target may be dead)\n",
+                             (ULONG)i, (PVOID)TargetPrcb->SignalDone);
+                    _spin = 0;
+                }
+            }
+        }
+
+        /* Request the rendezvous interrupt */
+        InterlockedBitTestAndSet((PLONG)&TargetPrcb->IpiFrozen, IPI_SYNCH_REQUEST);
+    }
+
+    /* Deliver all IPIs with a single request */
+    HalRequestIpi(TargetMask);
 }
 
 VOID
 FASTCALL
 KiIpiSignalPacketDone(IN PKIPI_CONTEXT PacketContext)
 {
-    /* FIXME: TODO */
-    ASSERTMSG("Not yet implemented\n", FALSE);
+    PKPRCB Prcb = KeGetCurrentPrcb();
+
+    UNREFERENCED_PARAMETER(PacketContext);
+
+    /* Tell the packet owner that our part is done. The owner waits for
+     * every target bit to clear (see KeIpiGenericCall/KeFlushEntireTb),
+     * and KiIpiServiceRoutine clears it again below, which is harmless. */
+    if (Prcb->SignalDone != NULL)
+    {
+        InterlockedBitTestAndReset((PLONG)&Prcb->SignalDone->TargetSet,
+                                   KeGetCurrentProcessorNumber());
+    }
+    KeMemoryBarrierWithoutFence();
 }
 
 VOID
@@ -65,8 +188,15 @@ FASTCALL
 KiIpiSignalPacketDoneAndStall(IN PKIPI_CONTEXT PacketContext,
                               IN volatile PULONG ReverseStall)
 {
-    /* FIXME: TODO */
-    ASSERTMSG("Not yet implemented\n", FALSE);
+    /* Signal completion first */
+    KiIpiSignalPacketDone(PacketContext);
+
+    /* Then stall until released */
+    while (*ReverseStall != 0)
+    {
+        YieldProcessor();
+        KeMemoryBarrierWithoutFence();
+    }
 }
 
 #if 0
@@ -177,7 +307,15 @@ KiIpiServiceRoutine(IN PKTRAP_FRAME TrapFrame,
         {
             while (0 != InterlockedCompareExchangeUL(&Prcb->SignalDone->CurrentPacket[1], 0, 0));
         }
-        ((VOID (NTAPI*)(PVOID))(Prcb->SignalDone->WorkerRoutine))(Prcb->SignalDone->CurrentPacket[0]);
+        /* Run the worker. PKIPI_WORKER takes 4 parameters: the packet
+         * context plus 3 optional ones. Passing all of them keeps the
+         * stdcall callee/caller stack accounting balanced (calling a
+         * 4-parameter stdcall worker with a single argument would
+         * corrupt the target's stack on return). */
+        Prcb->SignalDone->WorkerRoutine(Prcb->SignalDone->CurrentPacket[0],
+                                        NULL,
+                                        NULL,
+                                        NULL);
         InterlockedBitTestAndReset((PLONG)&Prcb->SignalDone->TargetSet, KeGetCurrentProcessorNumber());
         if (InterlockedCompareExchangeUL(&Prcb->SignalDone->CurrentPacket[2], 0, 0))
         {
@@ -201,6 +339,7 @@ KeIpiGenericCall(IN PKIPI_BROADCAST_WORKER Function,
     ULONG_PTR Status;
     KIRQL OldIrql, OldIrql2;
 #ifdef CONFIG_SMP
+    KIPI_GENERIC_CALL_CONTEXT CallContext;
     KAFFINITY Affinity;
     ULONG Count;
     PKPRCB Prcb = KeGetCurrentPrcb();
@@ -226,15 +365,22 @@ KeIpiGenericCall(IN PKIPI_BROADCAST_WORKER Function,
     /* Make sure this is MP */
     if (Affinity)
     {
+        /* The context lives on our stack. This is safe: we do not
+         * return until every target has run the function (see the
+         * TargetSet wait below). */
+        CallContext.Function = Function;
+        CallContext.Argument = Argument;
+
         /* Send an IPI */
         KiIpiSendPacket(Affinity,
                         KiIpiGenericCallTarget,
                         Function,
-                        Argument,
+                        (ULONG_PTR)&CallContext,
                         &Count);
 
-        /* Spin until the other processors are ready */
-        while (Count != 1)
+        /* Spin until the other processors have picked up the packet.
+         * KiIpiServiceRoutine decrements the arrival counter on receipt. */
+        while (Prcb->CurrentPacket[1] != NULL)
         {
             YieldProcessor();
             KeMemoryBarrierWithoutFence();
@@ -244,11 +390,6 @@ KeIpiGenericCall(IN PKIPI_BROADCAST_WORKER Function,
 
     /* Raise to IPI level */
     KeRaiseIrql(IPI_LEVEL, &OldIrql2);
-
-#ifdef CONFIG_SMP
-    /* Let the other processors know it is time */
-    Count = 0;
-#endif
 
     /* Call the function */
     Status = Function(Argument);

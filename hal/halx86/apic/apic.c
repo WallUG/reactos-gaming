@@ -240,13 +240,11 @@ FORCEINLINE
 VOID
 ApicSetIrql(KIRQL Irql)
 {
-    /* Always program the hardware TPR on raise. The lazy scheme used
-     * to update only the PCR here, leaving hardware TPR at 0: nothing
-     * was ever masked, so a level IRQ re-fired inside its own ISR
-     * (same spinlock held -> 0x0F SPIN_LOCK_ALREADY_OWNED, seen live
-     * with atapi on QEMU) and on SMP IPIs/timers stormed into critical
-     * sections. MMIO write cost (~100ns) is irrelevant vs correctness.
-     * Lower keeps its lazy sweep (harmless when already in sync). */
+    /* Always program the hardware TPR on raise (lazy-only leaves
+     * TPR=0: level IRQs re-fire inside their own ISR -> 0x0F, seen
+     * with atapi on QEMU). NOTE: no IRR publish here (a publish
+     * destabilized KVM at AP bring-up); the lower sweep below owns
+     * exactness instead. */
     __writefsbyte(FIELD_OFFSET(KPCR, Irql), Irql);
     ApicWrite(APIC_TPR, IrqlToTpr(Irql));
 }
@@ -269,10 +267,10 @@ ApicLowerIrql(KIRQL Irql)
         ApicWrite(APIC_TPR, IrqlToTpr(Irql));
     }
 
-    /* Invariant hard<=soft: lazy can leave a high residue
-     * (tpr=0x41/pcr=0 seen live: masks devices and, worse,
-     * clock/IPI = deaf AP). Whatever its origin, lower sweeps it:
-     * only correct downward (benign hard<soft lazy is left alone). */
+    /* Net (class-only): if hard TPR is above the requested class,
+     * correct downward. Exact-equality sweep destabilized KVM at AP
+     * bring-up (4x identical mminit deaths); investigate
+     * HalpIRQLtoTPR[] before re-tightening. */
     {
         ULONG _tpr = ApicRead(APIC_TPR) & 0xFF;
         ULONG _exp = HalpIRQLtoTPR[Irql];
@@ -292,6 +290,12 @@ FASTCALL
 HalpIrqToVector(UCHAR Irq)
 {
     IOAPIC_REDIRECTION_REGISTER ReDirReg;
+
+    /* Message-based (MSI/MSI-X) IRQs have no RTE: report free so the
+     * caller allocates a vector instead of asserting on the window
+     * (seen live: PnP satisfying IRQ 0x30 -> Register <= 0x3F fired
+     * into KDB). */
+    if (Irq >= APIC_MAX_IRQ) return APIC_FREE_VECTOR;
 
     /* Read low dword of the redirection entry */
     ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Irq);
@@ -419,10 +423,22 @@ HalpRoundRobinLapicId(UCHAR Index)
     ULONG _cpu;
     if (_n > 8) _n = 8;
     if (_n <= 1) return (UCHAR)(ApicRead(APIC_ID) >> 24);
-    if (Index == 10 || Index == 11 || Index == 14 || Index == 15)
-        return (UCHAR)(ApicRead(APIC_ID) >> 24);
-    _cpu = (_rr++) % _n;
-    return HalpProcessorIdentity[_cpu].LapicId;
+    /* TEMP-DEBUG AP-death hunt (real HW hangs in KiReleaseDispatcherLock
+     * right after RTEDBG idx11, AFFDBG pairs complete so migration is
+     * fine: the AP itself dies taking a device IRQ (wild driver call)
+     * and BSP wedges waiting for it. Pin everything to the BSP caller
+     * so the AP never takes devices (clock/IPI/TLB still work); if HW
+     * boots, confirmed. Revert-or-policy after test. */
+    (void)_rr; (void)_cpu; (void)Index;
+    {
+        static BOOLEAN _pinmsg = FALSE;
+        if (!_pinmsg)
+        {
+            _pinmsg = TRUE;
+            DbgPrint("PINHACK active: all device IRQs to BSP only\n");
+        }
+    }
+    return (UCHAR)(ApicRead(APIC_ID) >> 24);
 }
 
 UCHAR
@@ -618,12 +634,8 @@ HalpInitializePICs(IN BOOLEAN EnableInterrupts)
     HalpRegisterVector(IDT_INTERNAL, 0, APC_VECTOR, APC_LEVEL);
     HalpRegisterVector(IDT_INTERNAL, 0, DISPATCH_VECTOR, DISPATCH_LEVEL);
 
-    /* Do NOT restore IF here. STI with the frame half-torn-down
-     * (epilogue) delivers the first pending IRQ onto a broken stack ->
-     * handler returns to garbage -> GPF. Leave IF=0; the kernel
-     * enables it later with an intact frame. */
-    UNREFERENCED_PARAMETER(EnableInterrupts);
-    EFlags &= ~EFLAGS_INTERRUPT_MASK;
+    /* Restore interrupt state */
+    if (EnableInterrupts) EFlags |= EFLAGS_INTERRUPT_MASK;
     __writeeflags(EFlags);
 }
 
@@ -899,6 +911,28 @@ HalDisableSystemInterrupt(
     ReDirReg.Mask = 1;
 
     /* Write back lower dword */
+    IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
+}
+
+VOID
+NTAPI
+HalRearmSystemInterrupt(
+    IN ULONG Vector)
+{
+    /* Clear ONLY the mask bit of a storm-masked RTE (no reprogram:
+     * vector/dest/trigger stay as programmed). Self-healing for the
+     * kernel storm guard: unmask on driver connect (chained connects
+     * never call HalEnableSystemInterrupt, so a guard mask would
+     * otherwise deafen the line forever). No-op if already unmasked
+     * or vector unmapped. */
+    IOAPIC_REDIRECTION_REGISTER ReDirReg;
+    UCHAR Index;
+    if (Vector >= RTL_NUMBER_OF(HalpVectorToIndex)) return;
+    Index = HalpVectorToIndex[Vector];
+    if (Index >= APIC_MAX_IRQ) return;
+    ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);
+    if (ReDirReg.Mask == 0) return;
+    ReDirReg.Mask = 0;
     IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
 }
 

@@ -12,6 +12,26 @@
 #define               __builtin_expect(a,b) (a)
 #endif
 
+/* Current-CPU NtTib.ExceptionList through FS directly.
+ * Do NOT use KeGetPcr() here: in HAL builds KeGetPcr() is a fixed
+ * (BSP) address, so on an AP it would read/write the WRONG cpu's
+ * chain (every AP interrupt entry would compare the BSP chain
+ * against this cpu's fresh frame and assert as soon as they
+ * diverge). FS is always valid wherever these run. */
+FORCEINLINE
+PVOID
+KiTrapGetExceptionList(VOID)
+{
+    return (PVOID)__readfsdword(FIELD_OFFSET(KPCR, NtTib.ExceptionList));
+}
+
+FORCEINLINE
+VOID
+KiTrapSetExceptionList(PVOID Value)
+{
+    __writefsdword(FIELD_OFFSET(KPCR, NtTib.ExceptionList), (ULONG)Value);
+}
+
 //
 // Helper Code
 //
@@ -128,9 +148,9 @@ KiExitTrapDebugChecks(IN PKTRAP_FRAME TrapFrame,
     }
 
     /* Make sure we have a valid SEH chain */
-    if (KeGetPcr()->NtTib.ExceptionList == 0)
+    if (KiTrapGetExceptionList() == 0)
     {
-        DbgPrint("Exiting with NULL exception chain: %p\n", KeGetPcr()->NtTib.ExceptionList);
+        DbgPrint("Exiting with NULL exception chain: %p\n", KiTrapGetExceptionList());
         __debugbreak();
     }
 
@@ -347,7 +367,7 @@ KiEnterV86Trap(IN PKTRAP_FRAME TrapFrame)
     PVOID ExceptionList;
 
     /* Check exception list */
-    ExceptionList = KeGetPcr()->NtTib.ExceptionList;
+    ExceptionList = KiTrapGetExceptionList();
     ASSERTMSG("V86 trap handler must not register an SEH frame\n",
               ExceptionList == TrapFrame->ExceptionList);
 
@@ -361,6 +381,40 @@ KiEnterV86Trap(IN PKTRAP_FRAME TrapFrame)
 }
 
 //
+// Debug helper: raw serial dump, usable even inside the trap entry
+// (no KD, no locks, no stack-heavy calls).
+//
+FORCEINLINE
+VOID
+KiTrapRawPut(const char *s)
+{
+    while (*s)
+    {
+        ULONG spin = 1000000;
+        while (((READ_PORT_UCHAR((PUCHAR)0x3FD) & 0x20) == 0) && spin--) ;
+        WRITE_PORT_UCHAR((PUCHAR)0x3F8, *s++);
+    }
+}
+
+FORCEINLINE
+VOID
+KiTrapRawHex(ULONG v)
+{
+    CHAR c;
+    INT i;
+    for (i = 7; i >= 0; i--)
+    {
+        c = (CHAR)((v >> (i * 4)) & 0xF);
+        c += (c < 10) ? '0' : ('A' - 10);
+        {
+            ULONG spin = 100000;
+            while (((READ_PORT_UCHAR((PUCHAR)0x3FD) & 0x20) == 0) && spin--) ;
+            WRITE_PORT_UCHAR((PUCHAR)0x3F8, c);
+        }
+    }
+}
+
+//
 // Interrupt Trap Entry
 //
 FORCEINLINE
@@ -370,10 +424,14 @@ KiEnterInterruptTrap(IN PKTRAP_FRAME TrapFrame)
     PVOID ExceptionList;
 
     /* Check exception list and terminate it */
-    ExceptionList = KeGetPcr()->NtTib.ExceptionList;
+    ExceptionList = KiTrapGetExceptionList();
+    if (ExceptionList != TrapFrame->ExceptionList)
+    {
+        KiTrapRawPut("RAW: TRAPMM!\r\n");
+    }
     ASSERTMSG("Interrupt handler must not register an SEH frame\n",
               ExceptionList == TrapFrame->ExceptionList);
-    KeGetPcr()->NtTib.ExceptionList = EXCEPTION_CHAIN_END;
+    KiTrapSetExceptionList(EXCEPTION_CHAIN_END);
 
     /* Default to debugging disabled */
     TrapFrame->Dr7 = 0;
@@ -404,7 +462,7 @@ KiEnterTrap(IN PKTRAP_FRAME TrapFrame)
     PVOID ExceptionList;
 
     /* Check exception list */
-    ExceptionList = KeGetPcr()->NtTib.ExceptionList;
+    ExceptionList = KiTrapGetExceptionList();
     ASSERTMSG("Trap handler must not register an SEH frame\n",
               ExceptionList == TrapFrame->ExceptionList);
 

@@ -235,6 +235,48 @@ FdoQueryBusRelations(
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
 
+    /* SMP/APIC bring-up vs real HW: a level IRQ line shared by N PCI
+     * functions storms forever when ANY of them holds it asserted
+     * with no driver to ack it (xHCI/MEI/link-active NIC with no ROS
+     * driver keep BIOS-enabled INTx; the level re-fires into the
+     * innocent sharer's ISR thousands of times per tick -> boot
+     * wedges in the storm). Silence every enumerated function here
+     * (set INTx-disable); each device's own START re-enables legacy
+     * INTx only if it actually gets a line-based IRQ (MSI users and
+     * driverless functions stay silent). Forwarding through bridges
+     * is unaffected (the bit only gates the function's own assertion). */
+    {
+        PLIST_ENTRY _e;
+        for (_e = DeviceExtension->DeviceListHead.Flink;
+             _e != &DeviceExtension->DeviceListHead;
+             _e = _e->Flink)
+        {
+            PPCI_DEVICE _dev = CONTAINING_RECORD(_e, PCI_DEVICE, ListEntry);
+            USHORT _cmd = 0;
+            ULONG _sz;
+            _sz = HalGetBusDataByOffset(PCIConfiguration,
+                                        _dev->BusNumber,
+                                        _dev->SlotNumber.u.AsULONG,
+                                        &_cmd,
+                                        FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                        sizeof(_cmd));
+            if (_sz == sizeof(_cmd) && !(_cmd & PCI_DISABLE_LEVEL_INTERRUPT))
+            {
+                _cmd |= PCI_DISABLE_LEVEL_INTERRUPT;
+                HalSetBusDataByOffset(PCIConfiguration,
+                                      _dev->BusNumber,
+                                      _dev->SlotNumber.u.AsULONG,
+                                      &_cmd,
+                                      FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                      sizeof(_cmd));
+                DPRINT1("PCI: INTx disabled on %02x:%02x.%x (no driver yet)\n",
+                        _dev->BusNumber,
+                        _dev->SlotNumber.u.bits.DeviceNumber,
+                        _dev->SlotNumber.u.bits.FunctionNumber);
+            }
+        }
+    }
+
     if (Irp->IoStatus.Information)
     {
         /* FIXME: Another bus driver has already created a DEVICE_RELATIONS

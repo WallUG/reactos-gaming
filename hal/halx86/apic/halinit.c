@@ -15,7 +15,7 @@
 
 VOID
 NTAPI
-ApicInitializeLocalApic(ULONG Cpu);
+    ApicInitializeLocalApic(ULONG Cpu);
 
 /* FUNCTIONS ****************************************************************/
 
@@ -27,8 +27,8 @@ HalpInitProcessor(
 {
     if (ProcessorNumber == 0)
     {
-        HalpParseApicTables(LoaderBlock);
-    }
+            HalpParseApicTables(LoaderBlock);
+        }
 
     HalpSetupProcessorsTable(ProcessorNumber);
 

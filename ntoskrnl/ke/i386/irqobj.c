@@ -21,6 +21,14 @@ ULONG KiISRTimeout = 55;
 USHORT KiISROverflow = 30000;
 extern ULONG NTAPI KiChainedDispatch2ndLvl(VOID);
 
+/* TEMP-DIAG install-stamp hunt: KiConnectVectorToInterrupt stamps
+ * every NormalConnect install here (memory, immune to serial loss);
+ * the storm block dumps b1's stamp. Settles live-install vs stale
+ * template once and for all. Revert after test. */
+volatile ULONG_PTR KiVecInstallObj[256] = {0};
+volatile ULONG_PTR KiVecInstallRet[256] = {0};
+volatile ULONG KiVecInstallTick[256] = {0};
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 VOID
@@ -128,6 +136,28 @@ KiConnectVectorToInterrupt(IN PKINTERRUPT Interrupt,
     /* Register the interrupt (local IDT; mirror to APs below) */
     KeRegisterInterruptHandler(Interrupt->Vector, Handler);
 
+    /* TEMP-DIAG install-stamp: record NormalConnect installs (not
+     * disconnects/chains). Revert after test. */
+    if (Type == NormalConnect && Interrupt->Vector < 256)
+    {
+        KiVecInstallObj[Interrupt->Vector] = (ULONG_PTR)Interrupt;
+        KiVecInstallRet[Interrupt->Vector] = (ULONG_PTR)_ReturnAddress();
+        KiVecInstallTick[Interrupt->Vector] = KeTickCount.LowPart;
+        /* TEMP-DIAG red-handed trap DISABLED 2026-10-08 (caught:
+         * USBPORT_StartDevice; the reorder below should remove the
+         * early window entirely). Revert after test. */
+#if 0
+        if (Interrupt->Vector == 0xB1 && KeTickCount.LowPart < 1000)
+        {
+            KeBugCheckEx(0xAAAAAAAA,
+                         (ULONG_PTR)Interrupt,
+                         (ULONG_PTR)_ReturnAddress(),
+                         KeTickCount.LowPart,
+                         0);
+        }
+#endif
+    }
+
 #ifdef CONFIG_SMP
     /* IDT-sync: each AP's IDT is a copy taken at its startup; vectors
      * registered later (PnP: IRQ->C1...) stayed only on the BSP and
@@ -228,7 +258,139 @@ VOID
  * the log names the stormer for a proper per-device fix. */
 #define ISR_STORM_THRESHOLD 1000
 volatile ULONG KiIsrStormTick[256] = {0};
-volatile LONG KiIsrStormCount[256] = {0};
+volatile ULONG KiIsrStormCount[256] = {0};
+
+/* TEMP-DIAG ATA-vs-HW hunt: total ISR entries per vector since boot
+ * (distinguishes "ATA completion interrupts never arrive" from
+ * "driver programs the channel wrong"). Dumped once from
+ * IopMarkBootPartition (0x7B site). Revert after test. */
+volatile ULONG KiIsrTotalCount[256] = {0};
+
+/* TEMP-DIAG: set when the storm guard masks a vector (serial can lose
+ * the HAL's own prints under load; this software flag survives and is
+ * reported from the connect path, which always runs). */
+volatile BOOLEAN KiIsrStormMasked[256] = {FALSE};
+
+/* BISECT: once-ever storm reporting (per-tick-once flooded serial). */
+volatile LONG KiIsrStormReported[256] = {0};
+
+/* TEMP-DIAG ghost-object hunt: log the KINTERRUPT behind each vector
+ * once (pointer/ISR/lock/mode). Revert after test. */
+volatile LONG KiIsrWhoReported[256] = {0};
+
+FORCEINLINE
+VOID
+KiIsrWhoIs(IN PKINTERRUPT Interrupt)
+{
+    UCHAR Vector = Interrupt->Vector;
+    if (Vector >= 256) return;
+    if (InterlockedExchange(&KiIsrWhoReported[Vector], 1) == 0)
+    {
+        DbgPrint("ISRWHO vector %02x obj %p isr %p lock %p mode %u sync %u\n",
+                 (unsigned)Vector,
+                 (void *)Interrupt,
+                 (void *)Interrupt->ServiceRoutine,
+                 (void *)Interrupt->ActualLock,
+                 (unsigned)Interrupt->Mode,
+                 (unsigned)Interrupt->SynchronizeIrql);
+        /* TEMP-DIAG: resolve the ISR against loaded modules (names
+         * the ghost owner definitively). Revert after test. */
+        {
+            PLIST_ENTRY _le;
+            for (_le = PsLoadedModuleList.Flink;
+                 _le != &PsLoadedModuleList;
+                 _le = _le->Flink)
+            {
+                PLDR_DATA_TABLE_ENTRY _ld =
+                    CONTAINING_RECORD(_le, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+                ULONG_PTR _isr = (ULONG_PTR)Interrupt->ServiceRoutine;
+                ULONG_PTR _base = (ULONG_PTR)_ld->DllBase;
+                /* TEMP-DIAG: dump every usb* module base (resolves
+                 * AFBE/AFBF callers offline). Revert after test. */
+                if (_ld->BaseDllName.Length >= 6 &&
+                    (_ld->BaseDllName.Buffer[0] == L'u' ||
+                     _ld->BaseDllName.Buffer[0] == L'U') &&
+                    (_ld->BaseDllName.Buffer[1] == L's' ||
+                     _ld->BaseDllName.Buffer[1] == L'S') &&
+                    (_ld->BaseDllName.Buffer[2] == L'b' ||
+                     _ld->BaseDllName.Buffer[2] == L'B'))
+                {
+                    DbgPrint("USBMOD %wZ base %p size %lx\n",
+                             &_ld->BaseDllName,
+                             (void *)_base,
+                             (unsigned long)_ld->SizeOfImage);
+                }
+                if (_isr >= _base && _isr < _base + _ld->SizeOfImage)
+                {
+                    DbgPrint("GHOSTMOD vector %02x isr %p in %wZ+%x\n",
+                             (unsigned)Vector,
+                             (void *)Interrupt->ServiceRoutine,
+                             &_ld->BaseDllName,
+                             (unsigned)(_isr - _base));
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/* BISECT: last 5s-heartbeat tick per storming vector. */
+volatile LONG KiIsrStormHeartbeat[256] = {0};
+
+/* UNUSED (reverted 2026-10-08, kept for the next root-cause attempt). */
+volatile LONG KiIsrDepth[256] = {0};
+
+/* Same-CPU ISR/sync nesting (APIC bring-up): while a CPU runs inside
+ * an ISR or a KeSynchronizeExecution routine for vector V (lock
+ * held), a nested trap on the SAME vector on the SAME CPU must not
+ * re-acquire the lock (-> 0x0F SPIN_LOCK_ALREADY_OWNED, seen on real
+ * HW when PataEnableInterrupts asserts the shared level line with
+ * the lock held). Other vectors and other CPUs are unaffected (no
+ * shared state, plain stores, strictly paired set/clear). */
+#define KI_ISR_MAX_CPUS 32
+volatile LONG KiIsrCpuActive[KI_ISR_MAX_CPUS] = {0}; /* 0 = none, else vector+1 */
+
+FORCEINLINE
+BOOLEAN
+KiIsrNestedSelf(IN PKINTERRUPT Interrupt)
+{
+    ULONG Cpu = KeGetCurrentProcessorNumber();
+    if (Cpu >= KI_ISR_MAX_CPUS) return FALSE;
+    return (KiIsrCpuActive[Cpu] == (LONG)Interrupt->Vector + 1);
+}
+
+FORCEINLINE
+VOID
+KiIsrMarkActive(IN PKINTERRUPT Interrupt)
+{
+    ULONG Cpu = KeGetCurrentProcessorNumber();
+    if (Cpu < KI_ISR_MAX_CPUS) KiIsrCpuActive[Cpu] = (LONG)Interrupt->Vector + 1;
+}
+
+FORCEINLINE
+VOID
+KiIsrMarkIdle(VOID)
+{
+    ULONG Cpu = KeGetCurrentProcessorNumber();
+    if (Cpu < KI_ISR_MAX_CPUS) KiIsrCpuActive[Cpu] = 0;
+}
+
+VOID
+NTAPI
+KiIsrDumpTotals(VOID)
+{
+    UCHAR Vector;
+    for (Vector = 0; Vector < 255; Vector++)
+    {
+        ULONG Total = KiIsrTotalCount[Vector];
+        if (Total != 0)
+        {
+            DbgPrint("ISRTOT vector %02x total %lu\n",
+                     (unsigned)Vector, (unsigned long)Total);
+        }
+    }
+    DbgPrint("ISRTOT vector ff total %lu\n", (unsigned long)KiIsrTotalCount[255]);
+}
 
 FORCEINLINE
 BOOLEAN
@@ -236,24 +398,72 @@ KiIsrStormCheck(IN UCHAR Vector)
 {
     ULONG Tick = KeTickCount.LowPart;
     ULONG Last = (ULONG)InterlockedExchange((PLONG)&KiIsrStormTick[Vector], (LONG)Tick);
-    LONG Count;
+    ULONG Count;
+
+    /* TEMP-DIAG: count every ISR entry per vector (see KiIsrTotalCount) */
+    InterlockedIncrement((PLONG)&KiIsrTotalCount[Vector]);
 
     if (Last != Tick)
     {
         /* New tick: reset the counter, allow one grace ISR that sets it to 1 */
-        InterlockedExchange(&KiIsrStormCount[Vector], 1);
+        InterlockedExchange((PLONG)&KiIsrStormCount[Vector], 1);
         return FALSE;
     }
 
-    Count = InterlockedIncrement(&KiIsrStormCount[Vector]);
+    Count = InterlockedIncrement((PLONG)&KiIsrStormCount[Vector]);
     if (Count == ISR_STORM_THRESHOLD)
     {
-        /* Storm confirmed: mask it (level stays asserted, no more
-         * entries) and report once. Ownerless line or un-acked device;
-         * needs a per-device follow-up, but boot continues. */
+        /* Storm confirmed: mask (only mechanism that drops the
+         * delivery rate to zero; skip alone leaves 474K traps/sec
+         * starving workers AND DPCs) + skip ISR + report once EVER.
+         * Self-healing via HalRearmSystemInterrupt on every later
+         * connect (KeConnectInterrupt) so legit traffic resumes;
+         * the asserter's own reset (once its worker runs) ends it. */
         HalDisableSystemInterrupt(Vector, 0);
-        DbgPrint("ISRSTORM vector %02x masked after %lu hits in one tick (ownerless/shared line?)\n",
-                 (unsigned)Vector, (unsigned long)Count);
+        if (InterlockedExchange(&KiIsrStormReported[Vector], 1) == 0)
+        {
+            DbgPrint("ISRSTORM vector %02x storming (skip, no mask)\n",
+                     (unsigned)Vector);
+            KiIsrStormHeartbeat[Vector] = (LONG)Tick;
+            /* TEMP-DIAG stale-IDT hunt: dump the LIVE IDT gate for
+             * this vector (template+object vs Unexpected stub?).
+             * Revert after test. */
+            {
+                KDESCRIPTOR _desc;
+                PKIDTENTRY _gate;
+                ULONG_PTR _stub;
+                __sidt(&_desc.Limit);
+                _gate = &((PKIDTENTRY)_desc.Base)[Vector];
+                _stub = ((ULONG_PTR)&KiStartUnexpectedRange) +
+                        ((ULONG_PTR)HalVectorToIDTEntry(Vector) - PRIMARY_VECTOR_BASE) *
+                        KiUnexpectedEntrySize;
+                DbgPrint("IDTGATE vector %02x Sel %04X Off %04X Acc %02X Ext %04X stub %p %s IDTLimit %04X\n",
+                         (unsigned)Vector,
+                         (unsigned)_gate->Selector,
+                         (unsigned)_gate->Offset,
+                         (unsigned)_gate->Access,
+                         (unsigned)_gate->ExtendedOffset,
+                         (void *)_stub,
+                         ((((ULONG_PTR)_gate->Offset) |
+                           (((ULONG_PTR)_gate->ExtendedOffset) << 16)) == _stub) ?
+                         "STUB(fresh)" : "NOT-STUB",
+                         (unsigned)_desc.Limit);
+                /* TEMP-DIAG: dump the install stamp (live vs stale). */
+                DbgPrint("VECSTAMP vector %02x obj %p ret %p tick %lu\n",
+                         (unsigned)Vector,
+                         (void *)KiVecInstallObj[Vector],
+                         (void *)KiVecInstallRet[Vector],
+                         (unsigned long)KiVecInstallTick[Vector]);
+            }
+        }
+        else if ((Tick - (ULONG)KiIsrStormHeartbeat[Vector]) >= 500)
+        {
+            /* Still storming 5s later: heartbeat with running total. */
+            KiIsrStormHeartbeat[Vector] = (LONG)Tick;
+            DbgPrint("ISRSTORM vector %02x still storming, total %lu\n",
+                     (unsigned)Vector, (unsigned long)KiIsrTotalCount[Vector]);
+        }
+        KiIsrStormMasked[Vector] = TRUE; /* TEMP-DIAG (see decl) */
     }
     return (Count >= ISR_STORM_THRESHOLD);
 }
@@ -267,6 +477,31 @@ KiInterruptDispatch(IN PKTRAP_FRAME TrapFrame,
 
     /* Increase interrupt count */
     KeGetCurrentPrcb()->InterruptCount++;
+
+    KiIsrWhoIs(Interrupt); /* TEMP-DIAG ghost hunt */
+
+    /* REVERTED 2026-10-08: same-vector nesting guard swallowed normal
+     * entries on SMP (QEMU CD lost all completions -> 0x69;
+     * ISRTOT stayed empty). Suspect: depth never returns to 0 on
+     * some path, or AP/BSP same-vector concurrency. Root-cause with
+     * a working baseline first. */
+
+    /* Nested same-CPU/same-vector entry while the lock is held
+     * (ISR or sync routine below): EOI via Begin/End, never ISR. */
+    if (KiIsrNestedSelf(Interrupt))
+    {
+        if (HalBeginSystemInterrupt(Interrupt->SynchronizeIrql,
+                                    Interrupt->Vector,
+                                    &OldIrql))
+        {
+            KiExitInterrupt(TrapFrame, OldIrql, FALSE);
+        }
+        else
+        {
+            KiExitInterrupt(TrapFrame, OldIrql, TRUE);
+        }
+        return;
+    }
 
     /* Storm guard: do not even enter a storming vector (its stack is
      * already thousands deep elsewhere or about to be). Still run
@@ -296,8 +531,14 @@ KiInterruptDispatch(IN PKTRAP_FRAME TrapFrame,
             /* Acquire interrupt lock */
             KxAcquireSpinLock(Interrupt->ActualLock);
 
+            /* Mark this CPU inside the ISR (same-CPU nesting check) */
+            KiIsrMarkActive(Interrupt);
+
             /* Call the ISR */
             Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+
+            /* Back out */
+            KiIsrMarkIdle();
 
         /* Release interrupt lock */
         KxReleaseSpinLock(Interrupt->ActualLock);
@@ -324,10 +565,13 @@ KiChainedDispatch(IN PKTRAP_FRAME TrapFrame,
     /* Increase interrupt count */
     KeGetCurrentPrcb()->InterruptCount++;
 
-    /* Storm guard (see KiInterruptDispatch): shared level lines that
-     * nobody acks re-fire into themselves here. Same Begin/End
-     * discipline as above: EOI + exact IRQL restore, no ISR. */
-    if (KiIsrStormCheck(Interrupt->Vector))
+    KiIsrWhoIs(Interrupt); /* TEMP-DIAG ghost hunt */
+
+    /* REVERTED 2026-10-08: same as KiInterruptDispatch (see above). */
+
+    /* Nested same-CPU/same-vector entry while the lock is held
+     * (ISR or sync routine below): EOI via Begin/End, never ISR. */
+    if (KiIsrNestedSelf(Interrupt))
     {
         if (HalBeginSystemInterrupt(Interrupt->Irql,
                                     Interrupt->Vector,
@@ -341,6 +585,24 @@ KiChainedDispatch(IN PKTRAP_FRAME TrapFrame,
         }
         return;
     }
+
+    /* Storm guard (see KiInterruptDispatch): shared level lines that
+     * nobody acks re-fire into themselves here. Same Begin/End
+     * discipline as above: EOI + exact IRQL restore, no ISR. */
+    if (KiIsrStormCheck(Interrupt->Vector))
+    {
+        if (HalBeginSystemInterrupt(Interrupt->Irql,
+                                    Interrupt->Vector,
+                                    &OldIrql))
+        {
+            KiExitInterrupt(TrapFrame, OldIrql, FALSE);
+        }
+        else
+        {
+                KiExitInterrupt(TrapFrame, OldIrql, TRUE);
+            }
+            return;
+        }
 
     /* Begin the interrupt, making sure it's not spurious */
     if (HalBeginSystemInterrupt(Interrupt->Irql,
@@ -362,9 +624,15 @@ KiChainedDispatch(IN PKTRAP_FRAME TrapFrame,
             /* Acquire interrupt lock */
             KxAcquireSpinLock(Interrupt->ActualLock);
 
+            /* Mark this CPU inside the ISR (same-CPU nesting check) */
+            KiIsrMarkActive(Interrupt);
+
             /* Call the ISR */
             Handled = Interrupt->ServiceRoutine(Interrupt,
                                                 Interrupt->ServiceContext);
+
+            /* Back out */
+            KiIsrMarkIdle();
 
             /* Release interrupt lock */
             KxReleaseSpinLock(Interrupt->ActualLock);
@@ -590,6 +858,28 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
         Connected = FALSE;
     }
 
+    /* TEMP-DIAG ATA-vs-HW hunt: report connects on storm-masked vectors
+     * (proves the connect ran after the mask; HalEnable must then have
+     * taken the re-program/unmask path). Revert after test. */
+    if ((Connected) && (Vector < 256) && (KiIsrStormMasked[Vector]))
+    {
+        KiIsrStormMasked[Vector] = FALSE;
+        /* Self-healing: chained connects never call HalEnable, so
+         * unmask explicitly (no-op if already unmasked). */
+        HalRearmSystemInterrupt(Vector);
+        DbgPrint("STORMRECONN vector %02lx reconnected after storm mask (re-armed now)\n",
+                 (unsigned long)Vector);
+    }
+
+    /* TEMP-DIAG: every kernel connect (catches direct KeConnectInterrupt
+     * callers that bypass IoConnectInterrupt). Revert after test. */
+    if (Connected)
+    {
+        DbgPrint("KECONN vector %02lx irql %u cpu %u obj %p caller %p\n",
+                 (unsigned long)Vector, (unsigned)Irql, (unsigned)Number,
+                 (void *)Interrupt, _ReturnAddress());
+    }
+
     /* Return to caller */
     return Connected;
 }
@@ -699,8 +989,17 @@ KeSynchronizeExecution(IN OUT PKINTERRUPT Interrupt,
     /* Acquire interrupt spinlock */
     KeAcquireSpinLockAtDpcLevel(Interrupt->ActualLock);
 
+    /* Mark this CPU inside the sync routine: a nested trap on the
+     * same vector (device asserts with the lock held, e.g. enabling
+     * ATA interrupts on a shared level line) must EOI-and-return
+     * instead of deadlocking on the lock (0x0F on real HW). */
+    KiIsrMarkActive(Interrupt);
+
     /* Call the routine */
     Success = SynchronizeRoutine(SynchronizeContext);
+
+    /* Back out */
+    KiIsrMarkIdle();
 
     /* Release lock */
     KeReleaseSpinLockFromDpcLevel(Interrupt->ActualLock);

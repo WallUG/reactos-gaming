@@ -12,6 +12,10 @@
 #include <ntoskrnl.h>
 #include <reactos/buildno.h>
 
+/* Shipment tag: bump for every ISO handed to HW testers (banner shows
+ * it; md5 stays authoritative). Format SMP-<NNN>. */
+#define SMP_SHIP_TAG "SMP-050"
+
 #define NDEBUG
 #include <debug.h>
 
@@ -95,8 +99,11 @@ KdpPrintBanner(VOID)
     /* NOTE (smp-port): no Commit hash here on purpose. The hash came
      * from cmake configure time and lied whenever the tree was rebuilt
      * without reconfiguring (burned five identical-looking ISOs that
-     * were different). Build date/time always reflects the binary. */
-    DPRINT1("ReactOS " KERNEL_VERSION_STR " (Build " KERNEL_VERSION_BUILD_STR ", built " __DATE__ " " __TIME__ ")\n");
+     * were different). Build date/time always reflects the binary.
+     * SMP_SHIP_TAG below is bumped manually per shipped ISO so a
+     * banner unambiguously identifies the bits (stick mixups cost
+     * whole HW cycles). */
+    DPRINT1("ReactOS " KERNEL_VERSION_STR " (Build " KERNEL_VERSION_BUILD_STR ", built " __DATE__ " " __TIME__ ") [" SMP_SHIP_TAG "]\n");
     DPRINT1("%u System Processor [%u MB Memory]\n", KeNumberProcessors, MemSizeMBs);
 
     if (KeLoaderBlock)

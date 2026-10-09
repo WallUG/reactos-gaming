@@ -15,8 +15,12 @@
 
 /* GLOBALS ********************************************************************/
 
-/* Freeze data */
-KIRQL KiOldIrql;
+/* Freeze data (per-CPU: KdEnterDebugger can run concurrently on both
+ * CPUs on i386 (no freeze IPI), and a single global saved IRQL raced:
+ * one CPU's restore clobbered the other's, leaving IRQL stuck at
+ * DISPATCH and tripping PAGED_CODE asserts later. Enter/exit always
+ * pair on the same CPU (no migration at HIGH IRQL).) */
+KIRQL KiOldIrql[MAXIMUM_PROCESSORS];
 ULONG KiFreezeFlag;
 
 /* FUNCTIONS ******************************************************************/
@@ -54,7 +58,7 @@ KeFreezeExecution(IN PKTRAP_FRAME TrapFrame,
 #endif
 
     /* Save the old IRQL to be restored on unfreeze */
-    KiOldIrql = OldIrql;
+    KiOldIrql[KeGetCurrentProcessorNumber()] = OldIrql;
 
     /* Return whether interrupts were enabled */
     return Enable;
@@ -64,6 +68,7 @@ VOID
 NTAPI
 KeThawExecution(IN BOOLEAN Enable)
 {
+    ULONG Cpu = KeGetCurrentProcessorNumber();
 #ifdef CONFIG_SMP
     /* Architecture specific thaw code */
     KxThawExecution();
@@ -77,9 +82,9 @@ KeThawExecution(IN BOOLEAN Enable)
 
     /* Restore the old IRQL */
 #ifndef CONFIG_SMP
-    if (KiOldIrql < DISPATCH_LEVEL)
+    if (KiOldIrql[Cpu] < DISPATCH_LEVEL)
 #endif
-    KeLowerIrql(KiOldIrql);
+    KeLowerIrql(KiOldIrql[Cpu]);
 
     /* Re-enable interrupts */
     KeRestoreInterrupts(Enable);

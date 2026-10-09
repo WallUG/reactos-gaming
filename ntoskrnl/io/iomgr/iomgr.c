@@ -409,6 +409,10 @@ IopMarkBootPartition(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     HANDLE FileHandle;
     IO_STATUS_BLOCK IoStatusBlock;
     PFILE_OBJECT FileObject;
+    /* TEMP-DIAG ATA-vs-HW hunt (revert after test) */
+    extern VOID NTAPI KiIsrDumpTotals(VOID);
+
+    KiIsrDumpTotals();
 
     /* Build the ARC device name */
     sprintf(Buffer, "\\ArcName\\%s", LoaderBlock->ArcBootDeviceName);

@@ -1020,6 +1020,41 @@ HalDisableSystemInterrupt(IN ULONG Vector,
 /*
  * @implemented
  */
+VOID
+NTAPI
+HalRearmSystemInterrupt(IN ULONG Vector)
+{
+    ULONG IrqMask;
+    PIC_MASK PicMask;
+
+    /* Clear ONLY the mask bit (no reprogram). Self-healing for the
+     * kernel storm guard on driver connect. */
+    IrqMask = 1 << (Vector - PRIMARY_VECTOR_BASE);
+
+    /* Disable interrupts */
+    _disable();
+
+    /* Update software IDR */
+    KeGetPcr()->IDR &= ~IrqMask;
+
+    /* Read current interrupt mask */
+    PicMask.Master = __inbyte(PIC1_DATA_PORT);
+    PicMask.Slave = __inbyte(PIC2_DATA_PORT);
+
+    /* Clear the masked interrupt */
+    PicMask.Both &= ~IrqMask;
+
+    /* Write new interrupt mask */
+    __outbyte(PIC1_DATA_PORT, PicMask.Master);
+    __outbyte(PIC2_DATA_PORT, PicMask.Slave);
+
+    /* Bring interrupts back */
+    _enable();
+}
+
+/*
+ * @implemented
+ */
 BOOLEAN
 NTAPI
 HalBeginSystemInterrupt(IN KIRQL Irql,

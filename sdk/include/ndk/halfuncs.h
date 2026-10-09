@@ -297,6 +297,17 @@ HalEnableSystemInterrupt(
 );
 
 #ifdef __REACTOS__
+/* SMP/APIC bring-up: clear ONLY the mask bit of a storm-masked RTE
+ * (no reprogram). Kernel storm guard self-healing on driver connect. */
+NTHALAPI
+VOID
+NTAPI
+HalRearmSystemInterrupt(
+    _In_ ULONG Vector
+);
+#endif
+
+#ifdef __REACTOS__
 NTHALAPI
 VOID
 NTAPI

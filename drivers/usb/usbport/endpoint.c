@@ -817,6 +817,17 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
            FdoDevice,
            PipeHandle);
 
+    /* TEMP-DIAG USB-vs-HW hunt: identify every opened pipe (the 5th
+     * pipe on the first controller never completes on real HW).
+     * Revert after test. */
+    DPRINT1("USBPIPE DevAddr %u Speed %u EP %02X Attr %02X MaxPkt %u caller %p\n",
+            (unsigned)DeviceHandle->DeviceAddress,
+            (unsigned)DeviceHandle->DeviceSpeed,
+            (unsigned)PipeHandle->EndpointDescriptor.bEndpointAddress,
+            (unsigned)PipeHandle->EndpointDescriptor.bmAttributes,
+            (unsigned)PipeHandle->EndpointDescriptor.wMaxPacketSize,
+            _ReturnAddress());
+
     FdoExtension = FdoDevice->DeviceExtension;
     Packet = &FdoExtension->MiniPortInterface->Packet;
 

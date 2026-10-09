@@ -259,7 +259,14 @@ USBH_SyncSubmitUrb(IN PDEVICE_OBJECT DeviceObject,
     LARGE_INTEGER DueTime;
     NTSTATUS Status;
 
-    DPRINT("USBH_SyncSubmitUrb: ... \n");
+    /* TEMP-DIAG (see HUBSUBMIT above): same trace for the direct
+     * submitter (port-device descriptor fetches bypass the FDO
+     * wrapper). Revert after test. */
+    DbgPrint("HUBSUBMIT2 dev %p func %04X len %lu urb %p\n",
+             DeviceObject,
+             (unsigned)Urb->UrbHeader.Function,
+             (unsigned long)Urb->UrbHeader.Length,
+             Urb);
 
     Urb->UrbHeader.UsbdDeviceHandle = NULL;
 
@@ -336,6 +343,12 @@ USBH_SyncSubmitUrb(IN PDEVICE_OBJECT DeviceObject,
         IoStatusBlock.Status = Status;
     }
 
+    /* TEMP-DIAG (see HUBSUBMIT2 above). */
+    DbgPrint("HUBDONE2 dev %p func %04X status %08X\n",
+             DeviceObject,
+             (unsigned)Urb->UrbHeader.Function,
+             (unsigned)IoStatusBlock.Status);
+
     if (IsWaitTimeout)
     {
         KeWaitForSingleObject(&HubTimeoutContext->UrbTimeoutEvent,
@@ -356,13 +369,21 @@ USBH_FdoSyncSubmitUrb(IN PDEVICE_OBJECT FdoDevice,
                       IN PURB Urb)
 {
     PUSBHUB_FDO_EXTENSION HubExtension;
-
-    DPRINT("USBH_FdoSyncSubmitUrb: FdoDevice - %p, Urb - %p\n",
-           FdoDevice,
-           Urb);
+    NTSTATUS _st;
 
     HubExtension = FdoDevice->DeviceExtension;
-    return USBH_SyncSubmitUrb(HubExtension->LowerDevice, Urb);
+    /* TEMP-DIAG USB-vs-HW hunt: trace every sync URB submit + result
+     * (pipe #5's descriptor fetch never returns on real HW).
+     * Revert after test. */
+    DbgPrint("HUBSUBMIT func %04X len %lu buf %p\n",
+             (unsigned)Urb->UrbHeader.Function,
+             (unsigned long)Urb->UrbHeader.Length,
+             Urb);
+    _st = USBH_SyncSubmitUrb(HubExtension->LowerDevice, Urb);
+    DbgPrint("HUBDONE func %04X status %08X\n",
+             (unsigned)Urb->UrbHeader.Function,
+             (unsigned)_st);
+    return _st;
 }
 
 NTSTATUS
@@ -1886,6 +1907,13 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
     KIRQL Irql;
 
     DPRINT_SCE("USBH_ProcessPortStateChange ... \n");
+
+    /* TEMP-DIAG USB-vs-HW hunt: trace port changes (pipe #5's device
+     * never gets its descriptor fetch submitted). Revert after test. */
+    DbgPrint("HUBPORT hub %p port %u change %04X status %04X\n",
+             HubExtension, (unsigned)Port,
+             (unsigned)PortStatus->PortChange.AsUshort16,
+             (unsigned)PortStatus->PortStatus.AsUshort16);
 
     ASSERT(Port > 0);
     PortData = &HubExtension->PortData[Port - 1];
@@ -4412,6 +4440,11 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
     DPRINT("USBH_CreateDevice: Port - %x, UsbPortStatus - %lX\n",
            Port,
            UsbPortStatus.AsUshort16);
+
+    /* TEMP-DIAG (see HUBPORT above). */
+    DbgPrint("HUBCREATE hub %p port %u status %04X\n",
+             HubExtension, (unsigned)Port,
+             (unsigned)UsbPortStatus.AsUshort16);
 
     do
     {

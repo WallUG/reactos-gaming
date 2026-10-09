@@ -317,12 +317,22 @@ i8042MouDpcRoutine(
 	if (!DeviceExtension->MouseComplete)
 		return;
 
+	/* No interrupt (no PS/2 hardware): nothing to protect, skip the
+	 * lock instead of #PF on NULL (see pnp.c StartProcedure). */
+	if (!PortDeviceExtension->HighestDIRQLInterrupt)
+	{
+		DeviceExtension->MouseComplete = FALSE;
+		MouseInBufferCopy = DeviceExtension->MouseInBuffer;
+	}
+	else
+	{
 	Irql = KeAcquireInterruptSpinLock(PortDeviceExtension->HighestDIRQLInterrupt);
 
 	DeviceExtension->MouseComplete = FALSE;
 	MouseInBufferCopy = DeviceExtension->MouseInBuffer;
 
 	KeReleaseInterruptSpinLock(PortDeviceExtension->HighestDIRQLInterrupt, Irql);
+	}
 
 	TRACE_(I8042PRT, "Send a mouse packet\n");
 

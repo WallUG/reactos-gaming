@@ -44,6 +44,15 @@
 #define USB_PORT_TAG 'pbsu'
 #define URB_FUNCTION_MAX 0x31
 
+/* SMP/APIC bring-up: storm-mask self-healing (see TimerDpc in
+ * usbport.c). Imported from the HAL (all HALs implement it). */
+NTHALAPI
+VOID
+NTAPI
+HalRearmSystemInterrupt(
+    _In_ ULONG Vector
+);
+
 /* Hub Class Feature Selectors (Recipient - Port) */
 #define FEATURE_PORT_CONNECTION     0
 #define FEATURE_PORT_ENABLE         1
@@ -301,6 +310,9 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
   ULONG UsbBIOSx;
   LIST_ENTRY ControllerLink;
   ULONG CommonBufferLimit;
+  /* SMP/APIC bring-up: our line vector for storm-mask self-healing
+   * (TimerDpc re-arms it; KINTERRUPT is opaque to drivers). */
+  ULONG StormVector;
   /* Miniport */
   ULONG MiniPortFlags;
   PVOID MiniPortExt;
@@ -393,7 +405,7 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
 
   /* Miniport extension should be aligned on 0x100 */
 #if !defined(_M_X64)
-  ULONG Padded[64];
+  ULONG Padded[63]; /* was 64: -1 for StormVector above, size pinned below */
 #else
   ULONG Padded[30];
 #endif

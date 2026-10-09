@@ -1920,8 +1920,11 @@ KdEnterDebugger(IN PKTRAP_FRAME TrapFrame,
     /* Freeze all CPUs, raising also the IRQL to HIGH_LEVEL */
     Enable = KeFreezeExecution(TrapFrame, ExceptionFrame);
 
-    /* Lock the port, save its state and set the debugger entered flag */
-    KdpPortLocked = KeTryToAcquireSpinLockAtDpcLevel(&KdpDebuggerLock);
+    /* Lock the port, save its state and set the debugger entered flag.
+     * The ownership flag is per-CPU: entries pair with exits on the
+     * same CPU (see kddata.c). */
+    KdpPortLocked[KeGetCurrentProcessorNumber()] =
+        KeTryToAcquireSpinLockAtDpcLevel(&KdpDebuggerLock);
     KdSave(FALSE);
     KdEnteredDebugger = TRUE;
 
@@ -1940,7 +1943,8 @@ KdEnterDebugger(IN PKTRAP_FRAME TrapFrame,
     }
 
     /* Make sure we acquired the port */
-    if (!KdpPortLocked) KdpDprintf("Port lock was not acquired!\n");
+    if (!KdpPortLocked[KeGetCurrentProcessorNumber()])
+        KdpDprintf("Port lock was not acquired!\n");
 
     /* Return if interrupts needs to be re-enabled */
     return Enable;
@@ -1955,7 +1959,11 @@ KdExitDebugger(IN BOOLEAN Enable)
     /* Reset the debugger entered flag, restore the port state and unlock it */
     KdEnteredDebugger = FALSE;
     KdRestore(FALSE);
-    if (KdpPortLocked) KdpPortUnlock();
+    if (KdpPortLocked[KeGetCurrentProcessorNumber()])
+    {
+        KdpPortLocked[KeGetCurrentProcessorNumber()] = FALSE;
+        KdpPortUnlock();
+    }
 
     /* Unfreeze the CPUs, restoring also the IRQL */
     KeThawExecution(Enable);

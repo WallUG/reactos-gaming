@@ -1702,6 +1702,22 @@ Exit:
                    &FdoExtension->TimerDpc);
     }
 
+    /* SMP/APIC bring-up vs real HW: self-healing for storm-masked
+     * lines. The kernel storm guard masks a level line that fires
+     * with nobody acking it (BIOS-pending/shared), freeing the CPU
+     * so enumeration proceeds -- but a mask also blocks that
+     * controller's own completions (already-executed transfers wait
+     * as pending status in the HC, e.g. IAA, collected by nobody).
+     * Re-arm our own vector on every timer tick (no-op when already
+     * unmasked): completion windows open regularly, storm re-masks
+     * between them if the asserter persists. Progress at ~500ms
+     * granularity instead of a wedge. */
+    if ((FdoExtension->Flags & USBPORT_FLAG_INT_CONNECTED) &&
+        FdoExtension->InterruptObject)
+    {
+        HalRearmSystemInterrupt(FdoExtension->StormVector);
+    }
+
     DPRINT_TIMER("USBPORT_TimerDpc: exit\n");
 }
 

@@ -363,8 +363,20 @@ KdDebuggerInitialize1(
         /* Go to the next entry (the Init routine may unlink us) */
         CurrentEntry = CurrentEntry->Flink;
 
-        /* Get the initialization routine and reset it */
-        ASSERT(CurrentTable->KdpInitRoutine);
+        /* Get the initialization routine and reset it. A NULL routine
+         * means this provider was already consumed (double walk):
+         * skip it instead of asserting (a consumed provider needs no
+         * init). Log once so a corrupt list still shows up. */
+        if (!CurrentTable->KdpInitRoutine)
+        {
+            static LONG _skipN = 0;
+            if (_skipN++ < 4)
+            {
+                DbgPrint("KdProviders: skipping already-consumed provider %p\n",
+                         CurrentTable);
+            }
+            continue;
+        }
         KdpInitRoutine = CurrentTable->KdpInitRoutine;
         CurrentTable->KdpInitRoutine = NULL;
 

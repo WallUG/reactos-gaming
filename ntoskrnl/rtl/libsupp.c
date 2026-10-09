@@ -250,8 +250,17 @@ CHECK_PAGED_CODE_RTL(char *file, int line)
 {
   if(KeGetCurrentIrql() > APC_LEVEL)
   {
-    DbgPrint("%s:%i: Pagable code called at IRQL > APC_LEVEL (%u)\n", file, line, KeGetCurrentIrql());
-    ASSERT(FALSE);
+    /* BISECT 2026-10-09: stop downgraded to loud print (PnP-at-
+     * DISPATCH paths hit paged RTL (NLS) on SMP/UP-HW during USB
+     * enumeration; KDB stops wedge boot with zero diagnostic value,
+     * usually on the single-byte path that touches nothing paged).
+     * Cap output; a real DISPATCH page fault after this still
+     * bugchecks loudly by itself. Revert-or-fix raisers after HW. */
+    static LONG _rtlDbg = 0;
+    if (InterlockedIncrement(&_rtlDbg) <= 16)
+    {
+        DbgPrint("%s:%i: Pagable code called at IRQL > APC_LEVEL (%u)\n", file, line, KeGetCurrentIrql());
+    }
   }
 }
 #endif

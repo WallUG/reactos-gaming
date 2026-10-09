@@ -6,7 +6,7 @@
  * PROGRAMMERS: Copyright Victor Kirhenshtein (sauros@iname.com)
                 Copyright Jason Filby (jasonfilby@yahoo.com)
                 Copyright Martijn Vernooij (o112w8r02@sneakemail.com)
-                Copyright 2006-2007 Hervé Poussineau (hpoussin@reactos.org)
+                Copyright 2006-2007 Hervï¿½ Poussineau (hpoussin@reactos.org)
  */
 
 /* INCLUDES ******************************************************************/
@@ -68,6 +68,10 @@ i8042ReadData(
 	// If data is available
 	if (PortStatus & StatusFlags)
 	{
+		if (DeviceExtension->DataPort == NULL ||
+		    (ULONG_PTR)DeviceExtension->DataPort < 0x60 ||
+		    (ULONG_PTR)DeviceExtension->DataPort > 0x64)
+			return STATUS_UNSUCCESSFUL;
 		*Data = READ_PORT_UCHAR(DeviceExtension->DataPort);
 		INFO_(I8042PRT, "Read: 0x%02x (status: 0x%x)\n", Data[0], PortStatus);
 
@@ -83,7 +87,12 @@ i8042ReadStatus(
 	IN PPORT_DEVICE_EXTENSION DeviceExtension,
 	OUT PUCHAR Status)
 {
-	ASSERT(DeviceExtension->ControlPort != NULL);
+	/* Missing resources (e.g. PnP failed to assign ports on some
+	 * HAL/VM combos): fail gracefully instead of crashing. */
+	if (DeviceExtension->ControlPort == NULL ||
+	    (ULONG_PTR)DeviceExtension->ControlPort < 0x60 ||
+	    (ULONG_PTR)DeviceExtension->ControlPort > 0x64)
+		return STATUS_IO_TIMEOUT;
 	*Status = READ_PORT_UCHAR(DeviceExtension->ControlPort);
 	return STATUS_SUCCESS;
 }
@@ -203,8 +212,22 @@ i8042Write(
 {
 	ULONG Counter;
 
-	ASSERT(addr);
-	ASSERT(DeviceExtension->ControlPort != NULL);
+	/* Missing resources: fail gracefully instead of crashing. */
+	if (!addr || DeviceExtension->ControlPort == NULL)
+	{
+		WARN_(I8042PRT, "Write with NULL port (%p, ctrl %p)\n",
+		      addr, DeviceExtension->ControlPort);
+		return FALSE;
+	}
+
+	/* PS/2 ports are 0x60-0x64. A resource-corrupted extension hands a
+	 * wild value here (seen 0x90528282 on SMP bring-up); treat as no
+	 * device instead of a #PF that takes the whole boot down. */
+	if ((ULONG_PTR)addr < 0x60 || (ULONG_PTR)addr > 0x64)
+	{
+		WARN_(I8042PRT, "Refusing wild port %p\n", addr);
+		return FALSE;
+	}
 
 	Counter = DeviceExtension->Settings.PollingIterations;
 

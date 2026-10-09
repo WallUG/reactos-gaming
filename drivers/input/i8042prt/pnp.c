@@ -3,7 +3,7 @@
  * LICENSE:     GPL - See COPYING in the top level directory
  * FILE:        drivers/input/i8042prt/pnp.c
  * PURPOSE:     IRP_MJ_PNP operations
- * PROGRAMMERS: Copyright 2006-2007 Hervé Poussineau (hpoussin@reactos.org)
+ * PROGRAMMERS: Copyright 2006-2007 Hervï¿½ Poussineau (hpoussin@reactos.org)
  *              Copyright 2008 Colin Finck (mail@colinfinck.de)
  */
 
@@ -567,6 +567,27 @@ i8042PnpStartDevice(
     TRACE_(I8042PRT, "i8042PnpStartDevice(%p)\n", DeviceObject);
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     PortDeviceExtension = DeviceExtension->PortDeviceExtension;
+
+    /* SMP bring-up quarantine: on APIC-SMP HALs the PnP resource pass
+     * can fail (IRQ conflicts) and this START has been observed running
+     * with a corrupt FDO linkage (wild PortDeviceExtension), dying with
+     * a #PF deep inside StartProcedure. The controller ports always live
+     * in the driver-global extension (see AddDevice), so validate the
+     * linkage and fail the device gracefully instead of crashing. */
+    {
+        PI8042_DRIVER_EXTENSION DriverExtension;
+        DriverExtension = (PI8042_DRIVER_EXTENSION)IoGetDriverObjectExtension(
+            DeviceObject->DriverObject, DeviceObject->DriverObject);
+        if (!DriverExtension ||
+            PortDeviceExtension != &DriverExtension->Port ||
+            DeviceExtension->Fdo != DeviceObject ||
+            (DeviceExtension->Type != Keyboard && DeviceExtension->Type != Mouse))
+        {
+            WARN_(I8042PRT, "Corrupt FDO linkage (port %p, type %u), failing START\n",
+                  PortDeviceExtension, DeviceExtension->Type);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
 
     ASSERT(DeviceExtension->PnpState == dsStopped);
 

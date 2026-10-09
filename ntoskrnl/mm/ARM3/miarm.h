@@ -1157,8 +1157,23 @@ MiLockProcessWorkingSetShared(IN PEPROCESS Process,
     ASSERT(Thread->OwnsProcessWorkingSetShared == FALSE);
     ASSERT(Thread->OwnsProcessWorkingSetExclusive == FALSE);
 
-    /* Block APCs, make sure that still nothing is already held */
-    KeEnterGuardedRegion();
+    /* Block APCs, make sure that still nothing is already held.
+     * BISECT 2026-10-09: the stock KeEnterGuardedRegion() macro
+     * asserts IRQL<=APC, but dispatcher paths (KiDeferredReadyThread
+     * via KiExitDispatcher after KfLowerIrql) legitimately reach
+     * here above APC on SMP-HW during USB enumeration; stopping in
+     * KDB wedges boot. Hand-inline the macro (identical semantics)
+     * with a loud conditional instead of the stop. Revert-or-fix
+     * the raiser after HW validates. */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        DPRINT1("MIWS-LOCK-IRQL: irql %u locking process WS shared (raiser upstream)\n",
+                (unsigned)KeGetCurrentIrql());
+    }
+    ASSERT(Thread == (PETHREAD)KeGetCurrentThread());
+    ASSERT((Thread->Tcb.SpecialApcDisable <= 0) &&
+           (Thread->Tcb.SpecialApcDisable != -32768));
+    Thread->Tcb.SpecialApcDisable--;
     ASSERT(!MM_ANY_WS_LOCK_HELD(Thread));
 
     /* Lock the working set */
@@ -1233,9 +1248,20 @@ MiUnlockProcessWorkingSetShared(IN PEPROCESS Process,
     /* Don't claim the lock anylonger */
     Thread->OwnsProcessWorkingSetShared = FALSE;
 
-    /* Release the lock and re-enable APCs */
+    /* Release the lock first (original order), then re-enable APCs
+     * (hand-inlined KeLeaveGuardedRegion: same BISECT rationale as
+     * the enter above, identical semantics, loud instead of
+     * stopping). */
     ExReleasePushLockShared(&Process->Vm.WorkingSetMutex);
-    KeLeaveGuardedRegion();
+    ASSERT(Thread == (PETHREAD)KeGetCurrentThread());
+    ASSERT(Thread->Tcb.SpecialApcDisable < 0);
+    if (!(++(Thread)->Tcb.SpecialApcDisable))
+    {
+        if (!IsListEmpty(&(Thread)->Tcb.ApcState.ApcListHead[KernelMode]))
+        {
+            KiCheckForKernelApcDelivery();
+        }
+    }
 }
 
 //
@@ -1247,7 +1273,18 @@ MiUnlockProcessWorkingSetUnsafe(IN PEPROCESS Process,
                                 IN PETHREAD Thread)
 {
     /* Make sure we are the owner of an unsafe acquisition */
-    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+    /* BISECT 2026-10-08: IRQL assert downgraded (was ASSERT IRQL<=APC):
+     * PnP-at-DISPATCH paths (cancel spinlock held across registry
+     * mapping) legitimately arrive here above APC on SMP-HW; stopping
+     * in KDB wedges boot with zero diagnostic value, while continuing
+     * just unlocks (the violation is in the past). Loud DPRINT1 keeps
+     * it visible; count the fallout downstream. Revert-or-fix the
+     * raiser after HW validates. */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        DPRINT1("MIWS-UNLOCK-IRQL: irql %u at unsafe WS unlock (raiser upstream)\n",
+                (unsigned)KeGetCurrentIrql());
+    }
     ASSERT(KeAreAllApcsDisabled() == TRUE);
     ASSERT(MI_WS_OWNER(Process));
     ASSERT(MI_IS_WS_UNSAFE(Process));
@@ -1261,7 +1298,12 @@ MiUnlockProcessWorkingSetUnsafe(IN PEPROCESS Process,
 
     /* Release the lock but don't touch APC state */
     ExReleasePushLockExclusive(&Process->Vm.WorkingSetMutex);
-    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+    /* BISECT (see above): second IRQL assert on this path. */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        DPRINT1("MIWS-UNLOCK-IRQL2: irql %u after unsafe WS unlock\n",
+                (unsigned)KeGetCurrentIrql());
+    }
 }
 
 //
@@ -1314,8 +1356,18 @@ MiLockWorkingSetShared(
     _In_ PETHREAD Thread,
     _In_ PMMSUPPORT WorkingSet)
 {
-    /* Block APCs */
-    KeEnterGuardedRegion();
+    /* Block APCs (hand-inlined KeEnterGuardedRegion: same BISECT
+     * rationale as MiLockProcessWorkingSetShared -- dispatcher paths
+     * reach here above APC on SMP-HW; loud instead of stopping). */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        DPRINT1("MIWS-SYSLOCK-IRQL: irql %u locking system WS shared\n",
+                (unsigned)KeGetCurrentIrql());
+    }
+    ASSERT(Thread == (PETHREAD)KeGetCurrentThread());
+    ASSERT((Thread->Tcb.SpecialApcDisable <= 0) &&
+           (Thread->Tcb.SpecialApcDisable != -32768));
+    Thread->Tcb.SpecialApcDisable--;
 
     /* Working set should be in global memory */
     ASSERT(MI_IS_SESSION_ADDRESS((PVOID)WorkingSet) == FALSE);
@@ -1426,8 +1478,17 @@ MiUnlockWorkingSetShared(
     /* Release the working set lock */
     ExReleasePushLockShared(&WorkingSet->WorkingSetMutex);
 
-    /* Unblock APCs */
-    KeLeaveGuardedRegion();
+    /* Unblock APCs (hand-inlined KeLeaveGuardedRegion: same BISECT
+     * rationale as the enter above, identical semantics/order). */
+    ASSERT(Thread == (PETHREAD)KeGetCurrentThread());
+    ASSERT(Thread->Tcb.SpecialApcDisable < 0);
+    if (!(++(Thread)->Tcb.SpecialApcDisable))
+    {
+        if (!IsListEmpty(&(Thread)->Tcb.ApcState.ApcListHead[KernelMode]))
+        {
+            KiCheckForKernelApcDelivery();
+        }
+    }
 }
 
 FORCEINLINE

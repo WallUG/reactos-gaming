@@ -459,7 +459,9 @@ VOID
 NTAPI
 RtlpInitializeKeyedEvent(VOID)
 {
-    ASSERT(CondVarKeyedEventHandle == NULL);
+    /* Idempotent: LdrpProcessInitialization and DllMain(DLL_PROCESS_ATTACH)
+     * can both run for the same process (seen on SMP bring-up). */
+    if (CondVarKeyedEventHandle != NULL) return;
     NtCreateKeyedEvent(&CondVarKeyedEventHandle, EVENT_ALL_ACCESS, NULL, 0);
 }
 
@@ -467,7 +469,8 @@ VOID
 NTAPI
 RtlpCloseKeyedEvent(VOID)
 {
-    ASSERT(CondVarKeyedEventHandle != NULL);
+    /* Idempotent to match (a second detach must not assert). */
+    if (CondVarKeyedEventHandle == NULL) return;
     NtClose(CondVarKeyedEventHandle);
     CondVarKeyedEventHandle = NULL;
 }

@@ -63,7 +63,12 @@ VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 // Debugger State
 //
 KD_CONTEXT KdpContext;
-BOOLEAN KdpPortLocked;
+/* Per-CPU port-lock ownership: KdEnterDebugger can run concurrently on
+ * both CPUs on i386 (no freeze IPI), and a single global flag raced
+ * (one CPU's FALSE cleared the other's TRUE, leaking the lock forever
+ * and spamming "Port lock was not acquired!"). Enter/exit always pair
+ * on the same CPU (no migration at HIGH IRQL), so per-CPU is exact. */
+BOOLEAN KdpPortLocked[MAXIMUM_PROCESSORS];
 KSPIN_LOCK KdpDebuggerLock;
 BOOLEAN KdpControlCPressed;
 BOOLEAN KdpContextSent;

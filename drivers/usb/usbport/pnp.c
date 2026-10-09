@@ -785,25 +785,6 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
 
     RtlZeroMemory(FdoExtension->PendingIrpTable, sizeof(USBPORT_IRP_TABLE));
 
-    Status = IoConnectInterrupt(&FdoExtension->InterruptObject,
-                                USBPORT_InterruptService,
-                                (PVOID)FdoDevice,
-                                0,
-                                UsbPortResources->InterruptVector,
-                                UsbPortResources->InterruptLevel,
-                                UsbPortResources->InterruptLevel,
-                                UsbPortResources->InterruptMode,
-                                UsbPortResources->ShareVector,
-                                UsbPortResources->InterruptAffinity,
-                                0);
-
-
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("USBPORT_StartDevice: IoConnectInterrupt failed!\n");
-        goto ExitWithError;
-    }
-
     FdoExtension->Flags &= ~USBPORT_FLAG_INT_CONNECTED;
 
     if (Packet->MiniPortExtensionSize)
@@ -874,6 +855,37 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     }
     else
     {
+        /* SMP/APIC bring-up vs real HW: connect the ISR only AFTER
+         * the controller is started/reset (but BEFORE its IRQs are
+         * enabled below). Connecting first leaves a window where
+         * BIOS-pending line state fires into the fresh ISR with
+         * nobody able to ack it (controller not running yet): on a
+         * shared level line that is hundreds of thousands of full
+         * ISR entries/sec, starving the very worker that must start
+         * (reset) the controller -> eternal storm, boot wedges.
+         * Pre-connect the line fires only into cheap Unexpected
+         * stubs. */
+        Status = IoConnectInterrupt(&FdoExtension->InterruptObject,
+                                    USBPORT_InterruptService,
+                                    (PVOID)FdoDevice,
+                                    0,
+                                    UsbPortResources->InterruptVector,
+                                    UsbPortResources->InterruptLevel,
+                                    UsbPortResources->InterruptLevel,
+                                    UsbPortResources->InterruptMode,
+                                    UsbPortResources->ShareVector,
+                                    UsbPortResources->InterruptAffinity,
+                                    0);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("USBPORT_StartDevice: IoConnectInterrupt failed!\n");
+            goto ExitWithError;
+        }
+
+        FdoExtension->Flags |= USBPORT_FLAG_INT_CONNECTED;
+        FdoExtension->StormVector = UsbPortResources->InterruptVector;
+
         FdoExtension->MiniPortFlags |= USBPORT_MPFLAG_INTERRUPTS_ENABLED;
         USBPORT_MiniportInterrupts(FdoDevice, TRUE);
     }
