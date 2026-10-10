@@ -1720,19 +1720,22 @@ Exit:
     }
 
     /* SMP/APIC bring-up vs real HW: self-healing for storm-masked
-     * lines. The kernel storm guard masks a level line that fires
-     * with nobody acking it (BIOS-pending/shared), freeing the CPU
-     * so enumeration proceeds -- but a mask also blocks that
-     * controller's own completions (already-executed transfers wait
-     * as pending status in the HC, e.g. IAA, collected by nobody).
-     * Re-arm our own vector on every timer tick (no-op when already
-     * unmasked): completion windows open regularly, storm re-masks
-     * between them if the asserter persists. Progress at ~500ms
-     * granularity instead of a wedge. */
+     * lines. Re-arme por-vector por-tiempo (cada uno a ~500ms como
+     * mucho): sin contadores globales (una puerta %N compartida entre
+     * FDOs convierte el re-arme en lotería y un timer lento deja su
+     * línea enmascarada para siempre -- eso mató el 074). No-op
+     * cuando ya está sin máscara. */
     if ((FdoExtension->Flags & USBPORT_FLAG_INT_CONNECTED) &&
-        FdoExtension->InterruptObject)
+        FdoExtension->InterruptObject &&
+        FdoExtension->StormVector < 256)
     {
-        HalRearmSystemInterrupt(FdoExtension->StormVector);
+        static volatile LONG _rearmTv[256] = {0};
+        LONG _now = (LONG)KeTickCount.LowPart;
+        if (_now - _rearmTv[FdoExtension->StormVector] >= 50)
+        {
+            _rearmTv[FdoExtension->StormVector] = _now;
+            HalRearmSystemInterrupt(FdoExtension->StormVector);
+        }
     }
 
     DPRINT_TIMER("USBPORT_TimerDpc: exit\n");
