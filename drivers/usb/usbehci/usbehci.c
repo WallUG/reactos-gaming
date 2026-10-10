@@ -1308,6 +1308,32 @@ EHCI_StartController(IN PVOID ehciExtension,
 
     EhciExtension->IsStarted = TRUE;
 
+    /* Real storm-hunt: ack stale BIOS port-change bits (W1C) before
+     * the ISR connects. BIOS POST touches all ports and leaves
+     * Connect/Enable/OverCurrent change bits pending with no
+     * OS-visible cause; on a level line each unmask then
+     * EOI-retriggers ~1000 ISRs in the first tick (the onset flood).
+     * Read-modify-write preserves everything else (no reset/suspend/
+     * owner/power touched). Also clears the HC-level PortChange latch
+     * (USBSTS bit 2, R/WC). If the onset vanishes, stale bits were
+     * the holder; if it re-fires instantly every rearm, live one. */
+    {
+        ULONG _port;
+        for (_port = 1;
+             _port <= EhciExtension->NumberOfPorts && _port <= 15;
+             _port++)
+        {
+            EHCI_PORT_STATUS_CONTROL _psc;
+            _psc.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->PortControl[_port - 1].AsULONG);
+            _psc.ConnectStatusChange = 1;
+            _psc.PortEnableDisableChange = 1;
+            _psc.OverCurrentChange = 1;
+            WRITE_REGISTER_ULONG(&OperationalRegs->PortControl[_port - 1].AsULONG,
+                                 _psc.AsULONG);
+        }
+        WRITE_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG, 1 << 2);
+    }
+
     if (Resources->IsChirpHandled)
     {
         ULONG Port;
