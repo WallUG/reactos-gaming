@@ -144,6 +144,11 @@ typedef struct _EHCI_ENDPOINT {
   LIST_ENTRY ListTDs;
   const EHCI_PERIOD * PeriodTable;
   PEHCI_STATIC_QH StaticQH;
+  /* Running DATA toggle for bulk/interrupt (DATA0/DATA1 must strictly
+   * alternate across transfers; reset to DATA0 on ClearFeature-halt
+   * recovery via EHCI_SetEndpointDataToggle. Control has fixed phase
+   * toggles and doesn't use this. */
+  ULONG DataToggle;
 } EHCI_ENDPOINT, *PEHCI_ENDPOINT;
 
 /* EHCI Transfer follows USBPORT Transfer */

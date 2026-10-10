@@ -239,6 +239,10 @@ EHCI_OpenBulkOrControlEndpoint(IN PEHCI_EXTENSION EhciExtension,
 
     InitializeListHead(&EhciEndpoint->ListTDs);
 
+    /* Bulk/interrupt DATA toggle starts at DATA0 (alternates from
+     * here via MapAsyncTransferToTd). */
+    EhciEndpoint->DataToggle = 0;
+
     EhciEndpoint->DmaBufferVA = (PVOID)EndpointProperties->BufferVA;
     EhciEndpoint->DmaBufferPA = EndpointProperties->BufferPA;
 
@@ -360,6 +364,9 @@ EHCI_OpenInterruptEndpoint(IN PEHCI_EXTENSION EhciExtension,
     ASSERT(Idx < 8);
 
     InitializeListHead(&EhciEndpoint->ListTDs);
+
+    /* See OpenBulkOrControlEndpoint: DATA0 start. */
+    EhciEndpoint->DataToggle = 0;
 
     if (EhciEndpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed)
     {
@@ -2257,12 +2264,15 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
                 TD->HwTD.Token.PIDCode = EHCI_TD_TOKEN_PID_OUT;
 
             TD->HwTD.Token.Status = (UCHAR)EHCI_TOKEN_STATUS_ACTIVE;
-            TD->HwTD.Token.DataToggle = 1;
+            /* Alternation persists in the endpoint (was hardcoded 1:
+             * every transfer restarted at DATA1 and strict devices
+             * STALLed it). MapAsync flips on odd packet counts. */
+            TD->HwTD.Token.DataToggle = (UCHAR)EhciEndpoint->DataToggle;
 
             TransferedLen = EHCI_MapAsyncTransferToTd(EhciExtension,
                                                       EhciEndpoint->EndpointProperties.MaxPacketSize,
                                                       TransferedLen,
-                                                      0,
+                                                      &EhciEndpoint->DataToggle,
                                                       EhciTransfer,
                                                       TD,
                                                       SgList);
@@ -2316,7 +2326,7 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
         TD->HwTD.Buffer[0] = TD->PhysicalAddress;
 
         TD->HwTD.Token.Status = (UCHAR)EHCI_TOKEN_STATUS_ACTIVE;
-        TD->HwTD.Token.DataToggle = 1;
+        TD->HwTD.Token.DataToggle = (UCHAR)EhciEndpoint->DataToggle;
 
         TD->LengthThisTD = 0;
     }
@@ -2429,12 +2439,14 @@ EHCI_InterruptTransfer(IN PEHCI_EXTENSION EhciExtension,
             TD->HwTD.Token.PIDCode = EHCI_TD_TOKEN_PID_OUT;
 
         TD->HwTD.Token.Status = (UCHAR)EHCI_TOKEN_STATUS_ACTIVE;
-        TD->HwTD.Token.DataToggle = 1;
+        /* Same alternation as bulk (was hardcoded 1: hub status INs
+         * stalled every other interval on strict devices). */
+        TD->HwTD.Token.DataToggle = (UCHAR)EhciEndpoint->DataToggle;
 
         TransferedLen = EHCI_MapAsyncTransferToTd(EhciExtension,
                                                   EhciEndpoint->EndpointProperties.TotalMaxPacketSize,
                                                   TransferedLen,
-                                                  NULL,
+                                                  &EhciEndpoint->DataToggle,
                                                   EhciTransfer,
                                                   TD,
                                                   SgList);
@@ -3585,6 +3597,10 @@ EHCI_SetEndpointDataToggle(IN PVOID ehciExtension,
         TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT)
     {
         EhciEndpoint->QH->sqh.HwQH.Token.DataToggle = DataToggle;
+        /* Recovery resync point (ClearFeature ENDPOINT_HALT resets
+         * the device side to DATA0; the value passed here must be 0
+         * in that case or the next transfer STALLs again). */
+        EhciEndpoint->DataToggle = DataToggle;
     }
 }
 
