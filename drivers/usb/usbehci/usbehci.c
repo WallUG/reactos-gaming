@@ -1505,6 +1505,9 @@ EHCI_HardwarePresent(IN PEHCI_EXTENSION EhciExtension,
 /* TEMP-DIAG USB-vs-HW hunt: ISR heartbeat counters (see
  * EHCI_InterruptService). Revert after test. */
 static volatile ULONG EhciIsrEntries = 0;
+/* Telemetria bulk de toda la sesion (el cap de 60 oculta la fase tardia). */
+static volatile LONG UsbBulkSubmits = 0;
+static volatile LONG UsbBulkHalts = 0;
 static volatile ULONG EhciIsrAcks = 0;
 
 BOOLEAN
@@ -2380,10 +2383,11 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
     TD->NextHcdTD = EhciEndpoint->HcdTailP;
 
     /* FORENSE bulk-halt (primeros 60 submits; revert). tick = submit. */
+    if (EhciEndpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK)
     {
         static volatile LONG _bsub = 0;
-        if (EhciEndpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK &&
-            InterlockedIncrement(&_bsub) <= 60)
+        LONG _tot = InterlockedIncrement(&UsbBulkSubmits);
+        if (InterlockedIncrement(&_bsub) <= 60)
         {
             LARGE_INTEGER _t;
             KeQueryTickCount(&_t);
@@ -2394,6 +2398,8 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
                      (unsigned)FirstTD->HwTD.Token.DataToggle,
                      (unsigned long)_t.LowPart);
         }
+        if ((_tot % 512) == 0)
+            DbgPrint("BULKSTAT submits %ld halts %ld\n", (long)_tot, (long)UsbBulkHalts);
     }
 
     EHCI_EnableAsyncList(EhciExtension);
@@ -3081,6 +3087,7 @@ EHCI_GetErrorFromTD(IN PEHCI_HCD_TD TD)
      * submit-tick vs halt-tick dice cable (us) vs inanición (s). */
     {
         static volatile LONG _bhlt = 0;
+        InterlockedIncrement(&UsbBulkHalts);
         if (InterlockedIncrement(&_bhlt) <= 60)
         {
             LARGE_INTEGER _t;

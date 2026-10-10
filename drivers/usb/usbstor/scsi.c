@@ -123,6 +123,47 @@ USBSTOR_IssueRequestSense(
     IN PIRP Irp);
 
 IO_COMPLETION_ROUTINE USBSTOR_CSWCompletionRoutine;
+IO_COMPLETION_ROUTINE USBSTOR_DataCompletionRoutine;
+
+/* Fase5-SMP pacing: la fase DATA salia en el mismo completion del CBW
+ * (microsegundos despues); el stick STALLaba por no-estar-listo y cada
+ * comando pagaba 1-2 resets (~600ms). PIC, paceado por IRQ (~ms), va
+ * limpio. Diferir la DATA 10ms a workitem pasivo. Fallback: envio
+ * inmediato si no hay memoria para el contexto. */
+typedef struct _USBSTOR_DATA_PHASE_CTX {
+    WORK_QUEUE_ITEM WorkQueueItem;
+    PDEVICE_OBJECT DeviceObject;
+    PFDO_DEVICE_EXTENSION FdoExtension;
+    PIRP Irp;
+    USBD_PIPE_HANDLE PipeHandle;
+    ULONG TransferFlags;
+    ULONG TransferLength;
+    PVOID TransferBuffer;
+    PMDL Mdl;
+} USBSTOR_DATA_PHASE_CTX, *PUSBSTOR_DATA_PHASE_CTX;
+
+VOID
+NTAPI
+USBSTOR_DataPhaseWorkItemRoutine(
+    IN PVOID Context)
+{
+    PUSBSTOR_DATA_PHASE_CTX Ctx = (PUSBSTOR_DATA_PHASE_CTX)Context;
+    LARGE_INTEGER DueTime;
+
+    DueTime.QuadPart = -10 * 10000; /* 10ms */
+    KeDelayExecutionThread(KernelMode, FALSE, &DueTime);
+
+    USBSTOR_IssueBulkOrInterruptRequest(Ctx->FdoExtension,
+                                        Ctx->Irp,
+                                        Ctx->PipeHandle,
+                                        Ctx->TransferFlags,
+                                        Ctx->TransferLength,
+                                        Ctx->TransferBuffer,
+                                        Ctx->Mdl,
+                                        USBSTOR_DataCompletionRoutine);
+
+    ExFreePoolWithTag(Ctx, USB_STOR_TAG);
+}
 
 NTSTATUS
 NTAPI
@@ -414,6 +455,30 @@ USBSTOR_CBWCompletionRoutine(
     {
         ASSERT(Request->DataBuffer);
         TransferBuffer = Request->DataBuffer;
+    }
+
+    /* Fase DATA diferida 10ms a workitem (pacing anti-STALL); si no hay
+     * memoria para el contexto, envio inmediato como antes. */
+    {
+        PUSBSTOR_DATA_PHASE_CTX _dctx = ExAllocatePoolWithTag(NonPagedPool,
+                                                              sizeof(*_dctx),
+                                                              USB_STOR_TAG);
+        if (_dctx)
+        {
+            _dctx->DeviceObject = FDODeviceExtension->FunctionalDeviceObject;
+            _dctx->FdoExtension = FDODeviceExtension;
+            _dctx->Irp = Irp;
+            _dctx->PipeHandle = PipeHandle;
+            _dctx->TransferFlags = TransferFlags;
+            _dctx->TransferLength = Request->DataTransferLength;
+            _dctx->TransferBuffer = TransferBuffer;
+            _dctx->Mdl = Mdl;
+            ExInitializeWorkItem(&_dctx->WorkQueueItem,
+                                 USBSTOR_DataPhaseWorkItemRoutine,
+                                 _dctx);
+            ExQueueWorkItem(&_dctx->WorkQueueItem, DelayedWorkQueue);
+            return STATUS_MORE_PROCESSING_REQUIRED;
+        }
     }
 
     USBSTOR_IssueBulkOrInterruptRequest(FDODeviceExtension,
