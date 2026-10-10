@@ -23,6 +23,9 @@ ULONG                                      ProcessCount = 0;
 double                                     dbIdleTime;
 double                                     dbKernelTime;
 double                                     dbSystemTime;
+#define PERFDATA_MAX_CPUS                  64
+double                                     dbCpuUsage[PERFDATA_MAX_CPUS];
+double                                     dbCpuKernelUsage[PERFDATA_MAX_CPUS];
 LARGE_INTEGER                              liOldIdleTime = {{0,0}};
 double                                     OldKernelTime = 0;
 LARGE_INTEGER                              liOldSystemTime = {{0,0}};
@@ -250,6 +253,36 @@ void PerfDataRefresh(void)
      * Save system cache info
      */
     memcpy(&SystemCacheInfo, &SysCacheInfo, sizeof(SYSTEM_FILECACHE_INFORMATION));
+
+    /*
+     * Per-CPU usage: SystemProcessorTimeInfo still holds the previous
+     * refresh here (it is overwritten by the memcpy below), so delta
+     * against the fresh SysProcessorTimeInfo query. Mirrors the
+     * aggregate formula, without the /NumberOfProcessors divisor.
+     */
+    if (liOldIdleTime.QuadPart != 0)
+    {
+        double sysDelta = Li2Double(SysTimeInfo.CurrentTime) - Li2Double(liOldSystemTime);
+        if (sysDelta > 0)
+        {
+            ULONG nCpus = (ULONG)SystemBasicInfo.NumberOfProcessors;
+            if (nCpus > PERFDATA_MAX_CPUS)
+                nCpus = PERFDATA_MAX_CPUS;
+            for (Idx = 0; Idx < nCpus; Idx++)
+            {
+                double idleDelta = Li2Double(SysProcessorTimeInfo[Idx].IdleTime) -
+                                   Li2Double(SystemProcessorTimeInfo[Idx].IdleTime);
+                double kernDelta = (Li2Double(SysProcessorTimeInfo[Idx].KernelTime) +
+                                    Li2Double(SysProcessorTimeInfo[Idx].DpcTime) +
+                                    Li2Double(SysProcessorTimeInfo[Idx].InterruptTime)) -
+                                   (Li2Double(SystemProcessorTimeInfo[Idx].KernelTime) +
+                                    Li2Double(SystemProcessorTimeInfo[Idx].DpcTime) +
+                                    Li2Double(SystemProcessorTimeInfo[Idx].InterruptTime));
+                dbCpuUsage[Idx] = 100.0 - idleDelta * 100.0 / sysDelta;
+                dbCpuKernelUsage[Idx] = 100.0 - kernDelta * 100.0 / sysDelta;
+            }
+        }
+    }
 
     /*
      * Save system processor time info
@@ -483,6 +516,23 @@ ULONG PerfDataGetProcessorSystemUsage(void)
     Result = (ULONG)min(max(dbKernelTime, 0.), 100.);
     LeaveCriticalSection(&PerfDataCriticalSection);
     return Result;
+}
+
+ULONG PerfDataGetProcessorCount(void)
+{
+    return (ULONG)SystemBasicInfo.NumberOfProcessors;
+}
+
+BOOL PerfDataGetProcessorUsageEx(ULONG Index, PULONG Usage, PULONG KernelUsage)
+{
+    if (Index >= PERFDATA_MAX_CPUS ||
+        Index >= (ULONG)SystemBasicInfo.NumberOfProcessors)
+        return FALSE;
+    EnterCriticalSection(&PerfDataCriticalSection);
+    *Usage = (ULONG)min(max(dbCpuUsage[Index], 0.), 100.);
+    *KernelUsage = (ULONG)min(max(dbCpuKernelUsage[Index], 0.), 100.);
+    LeaveCriticalSection(&PerfDataCriticalSection);
+    return TRUE;
 }
 
 BOOL PerfDataGetImageName(ULONG Index, LPWSTR lpImageName, ULONG nMaxCount)

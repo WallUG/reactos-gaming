@@ -84,6 +84,16 @@ USBSTOR_ResetPipeWorkItemRoutine(
     Status = USBSTOR_ResetPipeWithHandle(FDODeviceExtension->LowerDeviceObject, Context->Urb.UrbBulkOrInterruptTransfer.PipeHandle);
     DPRINT1("USBSTOR_ResetPipeWithHandle Status %x\n", Status);
 
+    /* Fase5-SMP pacing: ClearFeature(HALT) needs device-side settle.
+     * Resubmitting immediately re-STALLs (log: double-HLT per command,
+     * ~600ms burned in reset cycles). A bounded passive wait lets the
+     * first retry succeed. Work-item context: PASSIVE_LEVEL, safe. */
+    {
+        LARGE_INTEGER _dueTime;
+        _dueTime.QuadPart = -100 * 10000; /* 100ms relative */
+        KeDelayExecutionThread(KernelMode, FALSE, &_dueTime);
+    }
+
     // now resend the csw as the stall got cleared
     USBSTOR_SendCSWRequest(FDODeviceExtension, Context->Irp);
 }
