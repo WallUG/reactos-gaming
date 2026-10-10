@@ -834,6 +834,14 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Save the initial thread and stack */
         InitialStack = (ULONG_PTR)KiApInitBlock[(ULONG)(UCHAR)Cpu].KernelStack;
         InitialThread = (PKTHREAD)KiApInitBlock[(ULONG)(UCHAR)Cpu].Thread;
+
+        /* TRACE 2026-10-09 (one line per AP): global-read Cpu was the
+         * stale-prone value; refined Cpu + snapshot must be self-owned.
+         * A late AP shows up here minutes after its siblings. */
+        DPRINT1("APSTART refined %u stack %p thread %p prcb %p\n",
+                (unsigned)(UCHAR)Cpu,
+                (PVOID)InitialStack, (PVOID)InitialThread,
+                (PVOID)__readfsdword(KPCR_PRCB));
     }
 
     /* Clean the APC List Head */
@@ -914,6 +922,15 @@ AppCpuInit:
     __writefsdword(KPCR_SET_MEMBER, 1 << Cpu);
     __writefsdword(KPCR_SET_MEMBER_COPY, 1 << Cpu);
     __writefsdword(KPCR_PRCB_SET_MEMBER, 1 << Cpu);
+
+    /* Release the freeze lock (amd64 parity: InterlockedAnd64 in its
+     * init path). i386 never released it: the first AP takes it above
+     * and every later AP spins at the loop forever (caught on 4-CPU HW:
+     * APSTART for CPU2/3 but never Starting CPU / never signaled). */
+    InterlockedAnd((PLONG)&KiFreezeExecutionLock, 0);
+
+    /* TRACE 2026-10-09 (one line per AP): past the freeze lock. */
+    if (Cpu) DPRINT1("APTHRU %u\n", (unsigned)(UCHAR)Cpu);
 
     KiVerifyCpuFeatures(Pcr->Prcb);
 

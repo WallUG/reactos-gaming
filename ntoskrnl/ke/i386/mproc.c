@@ -232,13 +232,17 @@ KeStartAllProcessors(VOID)
 
         // And wait for it to start (bounded: a dead AP used to hang
         // the boot mute forever; time out and continue degraded).
+        // Fuse is generous: a cold AP (calibration, storm onset,
+        // serial contention) can need seconds; a spurious timeout only
+        // launches the next CPU (whose HAL retarget may reset the slow
+        // one still in flight).
         {
             ULONG _spin = 0;
             while (KeLoaderBlock->Prcb != 0)
             {
                 KeMemoryBarrier();
                 YieldProcessor();
-                if (++_spin > 10000000UL)
+                if (++_spin > 200000000UL)
                 {
                     DPRINT1("KeStartAllProcessors: CPU%lu never signaled, continuing degraded\n",
                             ProcessorCount);
