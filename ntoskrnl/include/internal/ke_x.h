@@ -1362,8 +1362,26 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 #ifdef CONFIG_SMP
     ASSERT(Prcb->PrcbLock != 0);
 #endif
-    ASSERT(Thread->State == Running);
-    ASSERT(Thread->NextProcessor == Prcb->Number);
+    /* SMP bring-up: a thread that changed state (dispatched on another
+     * CPU, timed out twice, torn down) between the caller's check and
+     * this lock must NOT be queued again (double-insert corrupts the
+     * ready list / double-dispatch). Skip it instead of stopping: an
+     * already Ready/Standby thread runs from where it is. */
+    if ((Thread->State != Running) ||
+        (Thread->NextProcessor != Prcb->Number))
+    {
+        extern volatile LONG KiSchedSkipCount;
+        if (InterlockedIncrement(&KiSchedSkipCount) <= 8)
+        {
+            DbgPrint("SCHEDSKIP thread %p state %u nextproc %u prcb %u\n",
+                     Thread,
+                     (unsigned)Thread->State,
+                     (unsigned)Thread->NextProcessor,
+                     (unsigned)Prcb->Number);
+        }
+        KiReleasePrcbLock(Prcb);
+        return;
+    }
 
     /* Check if this thread is allowed to run in this CPU */
 #ifdef CONFIG_SMP

@@ -25,6 +25,10 @@
 KAFFINITY KiIdleSummary;
 KAFFINITY KiIdleSMTSummary;
 
+/* SMP bring-up: cap for the KxQueueReadyThread double-queue skip print
+ * (ke_x.h). */
+volatile LONG KiSchedSkipCount = 0;
+
 /* FUNCTIONS *****************************************************************/
 
 PKTHREAD
@@ -156,7 +160,21 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     PKTHREAD NextThread;
 
     /* Sanity checks */
-    ASSERT(Thread->State == DeferredReady);
+    /* SMP bring-up: a thread that left DeferredReady (queued /
+     * dispatched on another CPU, timed out twice, torn down) before
+     * this deferred DPC ran must NOT be processed again (double
+     * queue / double dispatch). Skip it: it runs from where it is. */
+    if (Thread->State != DeferredReady)
+    {
+        extern volatile LONG KiSchedSkipCount;
+        if (InterlockedIncrement(&KiSchedSkipCount) <= 8)
+        {
+            DbgPrint("SCHEDSKIPD thread %p state %u\n",
+                     Thread,
+                     (unsigned)Thread->State);
+        }
+        return;
+    }
     ASSERT((Thread->Priority >= 0) && (Thread->Priority <= HIGH_PRIORITY));
 
     /* Check if we have any adjusts to do */
@@ -326,11 +344,47 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     NextThread = Prcb->NextThread;
     if (NextThread)
     {
-        /* Sanity check */
-        ASSERT(NextThread->State == Standby);
+        /* SMP bring-up: stale pointer (dispatched but not cleared).
+         * Never demote a non-Standby thread (the old code set a
+         * Running thread DeferredReady -> double-dispatch -> the
+         * whole Running/DeferredReady/Standby assert family). Mirror
+         * the no-NextThread branch below: preempt if ours wins,
+         * replace the stale pointer, leave the running thread alone. */
+        if (NextThread->State != Standby)
+        {
+            if (InterlockedIncrement(&KiSchedSkipCount) <= 8)
+            {
+                DbgPrint("SCHEDSTALE prcb %p next %p state %u pri %u nextproc %u\n",
+                         Prcb,
+                         NextThread,
+                         (unsigned)NextThread->State,
+                         (unsigned)NextThread->Priority,
+                         (unsigned)NextThread->NextProcessor);
+            }
+            if (OldPriority > NextThread->Priority)
+            {
+                /* Preempt it if it's already running */
+                if (NextThread->State == Running)
+                    NextThread->Preempted = TRUE;
 
+                /* Set the thread on standby and as the next thread */
+                Thread->State = Standby;
+                Prcb->NextThread = Thread;
+
+                /* Release the lock */
+                KiReleasePrcbLock(Prcb);
+
+                /* Check if we're running on another CPU */
+                if (KeGetCurrentProcessorNumber() != Thread->NextProcessor)
+                {
+                    /* We are, send an IPI */
+                    KiIpiSend(AFFINITY_MASK(Thread->NextProcessor), IPI_DPC);
+                }
+                return;
+            }
+        }
         /* Check if priority changed */
-        if (OldPriority > NextThread->Priority)
+        else if (OldPriority > NextThread->Priority)
         {
             /* Preempt the thread */
             NextThread->Preempted = TRUE;
