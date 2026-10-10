@@ -93,6 +93,14 @@ USBSTOR_QueueAddIrp(
 
     SrbProcessing = FDODeviceExtension->IrpPendingCount != 0;
 
+    /* SMP bring-up vs sick devices: a reset in flight NULLs ActiveSrb
+     * without draining the pending count. Queueing behind a NULL
+     * ActiveSrb wedges (nothing will ever start us) and asserting
+     * stops boot on a classpnp timer DPC. Treat it as idle instead:
+     * adopt below and start now; the count converges as completions
+     * drain. */
+    SrbProcessing = SrbProcessing && (FDODeviceExtension->ActiveSrb != NULL);
+
     if (SrbProcessing)
     {
         // add irp to queue
@@ -112,14 +120,10 @@ USBSTOR_QueueAddIrp(
 
     if (SrbProcessing)
     {
-        ASSERT(FDODeviceExtension->ActiveSrb != NULL);
-
         OldDriverCancel = IoSetCancelRoutine(Irp, USBSTOR_Cancel);
     }
     else
     {
-        ASSERT(FDODeviceExtension->ActiveSrb == NULL);
-
         FDODeviceExtension->ActiveSrb = Request;
         OldDriverCancel = IoSetCancelRoutine(Irp, USBSTOR_CancelIo);
     }
