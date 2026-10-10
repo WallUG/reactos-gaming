@@ -890,12 +890,8 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
         USBPORT_MiniportInterrupts(FdoDevice, TRUE);
     }
 
-    /* Bisect de ritmo (base 073 que engancha): poll a 50ms para que
-     * las completions no esperen a la ventana; el re-arme sigue a
-     * ~500ms (puerta en TimerDpc). Si esto engancha en 3 min, el
-     * ritmo es el factor; si no, se revierte solo esto. */
-    FdoExtension->TimerValue = 50;
-    USBPORT_StartTimer((PVOID)FdoDevice, 50);
+    FdoExtension->TimerValue = 500;
+    USBPORT_StartTimer((PVOID)FdoDevice, 500);
 
     Status = USBPORT_RegisterDeviceInterface(FdoExtension->CommonExtension.LowerPdoDevice,
                                              FdoDevice,

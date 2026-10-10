@@ -956,6 +956,13 @@ USBPORT_IsrDpcHandler(IN PDEVICE_OBJECT FdoDevice,
 
     if (InterlockedIncrement(&FdoExtension->IsrDpcHandlerCounter))
     {
+        /* DIAG (first 3 bounces): a stuck counter bounces every call
+         * forever (submit ok, collect dead). */
+        {
+            static volatile LONG _bnc = 0;
+            if (InterlockedIncrement(&_bnc) <= 3)
+                DbgPrint("USBPBOUNCE fdo %p\n", FdoDevice);
+        }
         KeInsertQueueDpc(&FdoExtension->IsrDpc, NULL, NULL);
         InterlockedDecrement(&FdoExtension->IsrDpcHandlerCounter);
         return;
@@ -1631,6 +1638,16 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
 
     if (TimerFlags & USBPORT_TMFLAG_HC_SUSPENDED)
     {
+        /* DIAG (first 3 hits): a suspended controller exits WITHOUT
+         * IsrDpcHandler, so completions are never collected. */
+        {
+            static volatile LONG _susp = 0;
+            if (InterlockedIncrement(&_susp) <= 3)
+                DbgPrint("USBPSUSP fdo %p flags %08X tmflags %08X\n",
+                         FdoDevice,
+                         (unsigned)FdoExtension->Flags,
+                         (unsigned)TimerFlags);
+        }
         USBPORT_BadRequestFlush(FdoDevice);
         goto Exit;
     }
@@ -1708,16 +1725,14 @@ Exit:
      * so enumeration proceeds -- but a mask also blocks that
      * controller's own completions (already-executed transfers wait
      * as pending status in the HC, e.g. IAA, collected by nobody).
-     * Re-arm our own vector every 10th tick (~500ms even with the
-     * 50ms poll; no-op when already unmasked): completion windows
-     * keep opening regularly, storm re-masks between them if the
-     * asserter persists. Gated so a live line doesn't re-flood. */
+     * Re-arm our own vector on every timer tick (no-op when already
+     * unmasked): completion windows open regularly, storm re-masks
+     * between them if the asserter persists. Progress at ~500ms
+     * granularity instead of a wedge. */
     if ((FdoExtension->Flags & USBPORT_FLAG_INT_CONNECTED) &&
         FdoExtension->InterruptObject)
     {
-        static volatile LONG _rearmTick = 0;
-        if (InterlockedIncrement(&_rearmTick) % 10 == 0)
-            HalRearmSystemInterrupt(FdoExtension->StormVector);
+        HalRearmSystemInterrupt(FdoExtension->StormVector);
     }
 
     DPRINT_TIMER("USBPORT_TimerDpc: exit\n");
@@ -1743,6 +1758,11 @@ USBPORT_StartTimer(IN PDEVICE_OBJECT FdoDevice,
 
     FdoExtension->TimerFlags |= USBPORT_TMFLAG_TIMER_QUEUED;
     FdoExtension->TimerValue = Time;
+
+    /* DIAG (once per controller): proves each controller's poll timer
+     * actually started (a dead 2nd-controller timer = no poll, no
+     * rearm, wedge at first transfer). */
+    DbgPrint("USBPTIMER start fdo %p ms %lu\n", FdoDevice, (unsigned long)Time);
 
     KeInitializeTimer(&FdoExtension->TimerObject);
     KeInitializeDpc(&FdoExtension->TimerDpc, USBPORT_TimerDpc, FdoDevice);
