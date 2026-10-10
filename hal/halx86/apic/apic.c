@@ -845,19 +845,40 @@ HalEnableSystemInterrupt(
      * seen live on Q35+ (storm) and real PCH (silence). */
     {
         UCHAR _irq;
+        BOOLEAN _explicitPol = FALSE;
         for (_irq = 0; _irq < 16; _irq++)
         {
             if (HalpPicVectorRedirect[_irq] != Index) continue;
             if (HalpPicPolarity[_irq] == 1)
+            {
                 ReDirReg.Polarity = 0; /* active-high */
+                _explicitPol = TRUE;
+            }
             else if (HalpPicPolarity[_irq] == 3)
+            {
                 ReDirReg.Polarity = 1; /* active-low */
+                _explicitPol = TRUE;
+            }
             if (HalpPicTrigger[_irq] == 1)
                 ReDirReg.TriggerMode = APIC_TGM_Edge;
             else if (HalpPicTrigger[_irq] == 3)
                 ReDirReg.TriggerMode = APIC_TGM_Level;
             break;
         }
+        /* No explicit MADT polarity (conforms/absent): a level IRQ on a
+         * legacy pin (< 16) is a PCI INTx, which idles HIGH (open-drain
+         * active-low). Leaving it active-high makes the IOAPIC see a
+         * permanent assert -> instant storm on unmask (both EHCI lines
+         * flooding in the first tick on real PCH, while QEMU q35 - whose
+         * PCI model is active-high - stays clean and PIC HAL - which
+         * programs no polarity at all - is fast; APIC-UP storms too, so
+         * SMP is exonerated). Linux parity (PCI conforms => low/level).
+         * Edge keeps the ISA default (high). Native GSIs (>= 16) are
+         * left alone. Explicit MADT polarity above still wins. */
+        if (!_explicitPol &&
+            InterruptMode == LevelSensitive &&
+            Index < 16)
+            ReDirReg.Polarity = 1; /* active-low */
     }
 
     /* Write back the entry. Mask first: the RTE is two 32-bit MMIO
