@@ -1708,14 +1708,16 @@ Exit:
      * so enumeration proceeds -- but a mask also blocks that
      * controller's own completions (already-executed transfers wait
      * as pending status in the HC, e.g. IAA, collected by nobody).
-     * Re-arm our own vector on every timer tick (no-op when already
-     * unmasked): completion windows open regularly, storm re-masks
-     * between them if the asserter persists. Progress at ~500ms
-     * granularity instead of a wedge. */
+     * Re-arm our own vector every 10th tick (~500ms; no-op when
+     * already unmasked): completion windows keep opening regularly,
+     * storm re-masks between them if the asserter persists. Gated
+     * (not every 50ms tick) so a live line doesn't re-flood. */
     if ((FdoExtension->Flags & USBPORT_FLAG_INT_CONNECTED) &&
         FdoExtension->InterruptObject)
     {
-        HalRearmSystemInterrupt(FdoExtension->StormVector);
+        static volatile LONG _rearmTick = 0;
+        if (InterlockedIncrement(&_rearmTick) % 10 == 0)
+            HalRearmSystemInterrupt(FdoExtension->StormVector);
     }
 
     DPRINT_TIMER("USBPORT_TimerDpc: exit\n");

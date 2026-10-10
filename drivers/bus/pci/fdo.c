@@ -269,10 +269,6 @@ FdoQueryBusRelations(
                                       &_cmd,
                                       FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
                                       sizeof(_cmd));
-                DPRINT1("PCI: INTx disabled on %02x:%02x.%x (no driver yet)\n",
-                        _dev->BusNumber,
-                        _dev->SlotNumber.u.bits.DeviceNumber,
-                        _dev->SlotNumber.u.bits.FunctionNumber);
             }
         }
     }

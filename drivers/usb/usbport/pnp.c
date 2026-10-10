@@ -890,8 +890,16 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
         USBPORT_MiniportInterrupts(FdoDevice, TRUE);
     }
 
-    FdoExtension->TimerValue = 500;
-    USBPORT_StartTimer((PVOID)FdoDevice, 500);
+    /* SMP/APIC bring-up vs real HW: the storm guard masks a
+     * permanently-asserted (BIOS/shared) level line, so interrupt
+     * completions stop and this timer's CheckController+IsrDpcHandler
+     * poll becomes the completion path. Poll at 50ms instead of
+     * 500ms: a BOT command needs ~3 poll windows, i.e. ~150ms not
+     * ~1.5s. The re-arm below stays gated at ~500ms (every 10th
+     * tick): completion windows keep opening, without re-flooding
+     * every 50ms. */
+    FdoExtension->TimerValue = 50;
+    USBPORT_StartTimer((PVOID)FdoDevice, 50);
 
     Status = USBPORT_RegisterDeviceInterface(FdoExtension->CommonExtension.LowerPdoDevice,
                                              FdoDevice,

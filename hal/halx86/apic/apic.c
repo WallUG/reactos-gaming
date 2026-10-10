@@ -430,14 +430,6 @@ HalpRoundRobinLapicId(UCHAR Index)
      * so the AP never takes devices (clock/IPI/TLB still work); if HW
      * boots, confirmed. Revert-or-policy after test. */
     (void)_rr; (void)_cpu; (void)Index;
-    {
-        static BOOLEAN _pinmsg = FALSE;
-        if (!_pinmsg)
-        {
-            _pinmsg = TRUE;
-            DbgPrint("PINHACK active: all device IRQs to BSP only\n");
-        }
-    }
     return (UCHAR)(ApicRead(APIC_ID) >> 24);
 }
 
@@ -874,19 +866,6 @@ HalEnableSystemInterrupt(
 
     /* Write back the entry (unmasked) */
     ApicWriteIORedirectionEntry(Index, ReDirReg);
-
-    /* TEMP-DEBUG IRQ routing hunt: dump every programmed RTE (compare
-     * with board MADT on real HW; wrong trigger/dest/mask hangs device
-     * completion waits). Revert after test. */
-    {
-        IOAPIC_REDIRECTION_REGISTER _rd;
-        _rd = ApicReadIORedirectionEntry(Index);
-        DbgPrint("RTEDBG idx %02u vec %02x trig %s pol %s dst %02x mask %u\n",
-                 (unsigned)Index, (unsigned)Vector,
-                 _rd.TriggerMode ? "level" : "edge",
-                 _rd.Polarity ? "low" : "high",
-                 (unsigned)_rd.Destination, (unsigned)_rd.Mask);
-    }
 
     return TRUE;
 }
