@@ -2324,6 +2324,22 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
     TD->HwTD.NextTD = EhciEndpoint->HcdTailP->PhysicalAddress;
     TD->NextHcdTD = EhciEndpoint->HcdTailP;
 
+    /* FORENSE bulk-halt (primeros 60 submits; revert). tick = submit. */
+    {
+        static volatile LONG _bsub = 0;
+        if (EhciEndpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK &&
+            InterlockedIncrement(&_bsub) <= 60)
+        {
+            LARGE_INTEGER _t;
+            KeQueryTickCount(&_t);
+            DbgPrint("BULKSUB ep %02X len %lu firstDT %u tick %lu\n",
+                     (unsigned)EhciEndpoint->EndpointProperties.EndpointAddress,
+                     (unsigned long)TransferParameters->TransferBufferLength,
+                     (unsigned)FirstTD->HwTD.Token.DataToggle,
+                     (unsigned long)_t.LowPart);
+        }
+    }
+
     EHCI_EnableAsyncList(EhciExtension);
     EHCI_LinkTransferToQueue(EhciExtension, EhciEndpoint, FirstTD);
 
@@ -3002,6 +3018,25 @@ EHCI_GetErrorFromTD(IN PEHCI_HCD_TD TD)
     ASSERT(TD->HwTD.Token.Status & EHCI_TOKEN_STATUS_HALTED);
 
     Token = TD->HwTD.Token;
+
+    /* FORENSE bulk-halt (primeros 60 halts; revert). tick = collect.
+     * submit-tick vs halt-tick dice cable (us) vs inanición (s). */
+    {
+        static volatile LONG _bhlt = 0;
+        if (InterlockedIncrement(&_bhlt) <= 60)
+        {
+            LARGE_INTEGER _t;
+            KeQueryTickCount(&_t);
+            DbgPrint("BULKHLT raw %08X dt %u pid %u cerr %u bytes %u active %u tick %lu\n",
+                     Token.AsULONG,
+                     (unsigned)Token.DataToggle,
+                     (unsigned)Token.PIDCode,
+                     (unsigned)Token.ErrorCounter,
+                     (unsigned)Token.TransferBytes,
+                     (unsigned)((Token.Status & EHCI_TOKEN_STATUS_ACTIVE) != 0),
+                     (unsigned long)_t.LowPart);
+        }
+    }
 
     if (Token.Status & EHCI_TOKEN_STATUS_TRANSACTION_ERROR)
     {
