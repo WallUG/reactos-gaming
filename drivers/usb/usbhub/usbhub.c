@@ -580,6 +580,13 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
     }
 
     USBH_Wait(10);
+    /* SMP/APIC bring-up vs real HW: settle de recovery tras reset con
+     * éxito (el mínimo del spec son 10ms; sticks baratos necesitan
+     * cientos). Sin esto el primer GET_DESCRIPTOR muere con XactErr
+     * 3x idéntico y el dispositivo se elimina (sin disco de arranque
+     * -> 0x7B). Coste solo-enumeración. */
+    if (NT_SUCCESS(Status))
+        USBH_Wait(500);
     HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_RESET_PORT_LOCK;
 
 Exit:
@@ -4408,6 +4415,12 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
     DPRINT("USBH_CreateDevice: Port - %x, UsbPortStatus - %lX\n",
            Port,
            UsbPortStatus.AsUshort16);
+
+    /* SMP bring-up: una línea por dispositivo enumerado (prueba mínima
+     * de enganche USB; ~20 por boot, no es flood). */
+    DbgPrint("HUBCREATE hub %p port %u status %04X\n",
+             HubExtension, (unsigned)Port,
+             (unsigned)UsbPortStatus.AsUshort16);
 
     do
     {
