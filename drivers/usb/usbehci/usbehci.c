@@ -3522,21 +3522,29 @@ EHCI_CheckController(IN PVOID ehciExtension)
 
     //DPRINT_EHCI("EHCI_CheckController: ... \n");
 
-    /* TEMP-DIAG USB-vs-HW hunt: HC liveness every ~5s (called from
-     * usbport's 500ms timer DPC, runs even with zero interrupts).
-     * Tells RS/ASE/PSE, halted/errors, pending status, frame
-     * advance at the pipe-5 wedge. Revert after test. */
+    /* TEMP-DIAG 086-wedge hunt: HC state dump every ~10s (called from
+     * usbport's 50ms timer DPC, runs even with zero interrupts).
+     * The 086 log proved: poll runs forever, ISR never fires, first HS
+     * transfer never completes. This tells whether the HC is halted /
+     * stopped / async-off / doorbell-stuck / schedule-empty / port
+     * wedged. Revert after test. */
     {
         static volatile ULONG _chkN = 0;
         ULONG _n = InterlockedIncrement((PLONG)&_chkN);
-        if ((_n % 10) == 0)
+        if ((_n % 200) == 0)
         {
             ULONG _cmd = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcCommand.AsULONG);
             ULONG _sts = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcStatus.AsULONG);
             ULONG _fri = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->FrameIndex);
             ULONG _ien = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcInterruptEnable.AsULONG);
-            if (0) DbgPrint("EHCIHB2 hc %p cmd %08X sts %08X ien %08X fr %08X n %lu\n",
-                     EhciExtension, _cmd, _sts, _ien, _fri, (unsigned long)_n);
+            ULONG _asy = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->AsyncListBase);
+            ULONG _p0 = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->PortControl[0].AsULONG);
+            DbgPrint("EHCIST hc %p RS=%lu ASE=%lu PSE=%lu IAA=%lu HALT=%lu INT=%lu ERR=%lu AA=%lu PCHG=%lu AS=%lu PS=%lu ien %08lX asy %08lX fr %05lX p0 %08lX n %lu\n",
+                     EhciExtension,
+                     (_cmd >> 0) & 1, (_cmd >> 5) & 1, (_cmd >> 4) & 1, (_cmd >> 6) & 1,
+                     (_sts >> 12) & 1, (_sts >> 0) & 1, (_sts >> 1) & 1, (_sts >> 5) & 1,
+                     (_sts >> 2) & 1, (_sts >> 15) & 1, (_sts >> 14) & 1,
+                     _ien, _asy, _fri & 0x3FFF, _p0, (unsigned long)_n);
         }
     }
 
