@@ -335,8 +335,15 @@ ValidatePort(
         case 0x3B6: return (Size <= 2);
     }
 
-    /* Allow but report unknown ports, we trust the BIOS for now */
-    DPRINT1("Unknown port 0x%x, size %d, write %d\n", Port, Size, IsWrite);
+    /* Allow but report unknown ports, we trust the BIOS for now.
+     * Capped: VBIOS polling loops hit these thousands of times per
+     * second (minutes of serial spam at 115200); behavior is
+     * identical with or without the print. */
+    {
+        static volatile LONG _unkPort = 0;
+        if (InterlockedIncrement(&_unkPort) <= 16)
+            DPRINT1("Unknown port 0x%x, size %d, write %d\n", Port, Size, IsWrite);
+    }
     return TRUE;
 }
 
@@ -350,10 +357,13 @@ x86IoRead(
     ULONG DataCount,
     UCHAR DataSize)
 {
-    /* Validate the port */
+    /* Validate the port (capped: same VBIOS polling flood as above;
+     * the read below executes regardless). */
     if (!ValidatePort(Port, DataSize, FALSE))
     {
-        DPRINT1("Invalid IO port read access (port: 0x%x, count: 0x%x)\n", Port, DataSize);
+        static volatile LONG _invPort = 0;
+        if (InterlockedIncrement(&_invPort) <= 16)
+            DPRINT1("Invalid IO port read access (port: 0x%x, count: 0x%x)\n", Port, DataSize);
     }
 
     switch (DataSize)
