@@ -1074,6 +1074,14 @@ DriverEntry(
     DriverObject->DriverUnload = KbdHid_Unload;
     DriverObject->DriverExtension->AddDevice = KbdHid_AddDevice;
 
+    /* SMP bring-up vs real HW: never unload this driver. Its read IRPs
+     * are completed asynchronously by hidusb's reset worker, which can
+     * outlive surprise-removal: unloading deletes the image while a
+     * completion chain still points into it (0x50 in unloaded code on
+     * keyboard unplug at desktop). One leaked reference; replug keeps
+     * working via AddDevice on the resident driver. */
+    ObReferenceObject(DriverObject);
+
     /* done */
     return STATUS_SUCCESS;
 }
