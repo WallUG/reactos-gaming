@@ -1135,6 +1135,15 @@ USBPORT_InterruptService(IN PKINTERRUPT Interrupt,
     if (FdoExtension->Flags & USBPORT_FLAG_INTERRUPT_ENABLED &&
         FdoExtension->MiniPortFlags & USBPORT_MPFLAG_INTERRUPTS_ENABLED)
     {
+        /* TEMP-DIAG 085-wedge hunt (3-way verdict, revert after):
+         * first real ISR entries per boot. USBALIVE running + no
+         * USBFIRE = HC never asserts; USBALIVE stopped = high-IRQL
+         * wedge; USBFIRE without progress = completion path stuck. */
+        {
+            static volatile LONG _fire = 0;
+            if (InterlockedIncrement(&_fire) <= 4)
+                DbgPrint("USBFIRE fdo %p #%ld\n", FdoDevice, (long)_fire);
+        }
         Result = Packet->InterruptService(FdoExtension->MiniPortExt);
 
         if (Result)
@@ -1717,6 +1726,18 @@ Exit:
         KeSetTimer(&FdoExtension->TimerObject,
                    DueTime,
                    &FdoExtension->TimerDpc);
+    }
+
+    /* TEMP-DIAG 085-wedge hunt (revert after): ~10s heartbeat proves
+     * the poll timer still runs (CPU not wedged at high IRQL). */
+    {
+        static volatile LONG _aliveTv = 0;
+        LONG _nowA = (LONG)KeTickCount.LowPart;
+        if (_nowA - _aliveTv >= 1000)
+        {
+            _aliveTv = _nowA;
+            DbgPrint("USBALIVE tick %ld\n", (long)_nowA);
+        }
     }
 
     /* SMP/APIC bring-up vs real HW: self-healing for storm-masked
