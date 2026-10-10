@@ -262,7 +262,7 @@ USBH_SyncSubmitUrb(IN PDEVICE_OBJECT DeviceObject,
     /* TEMP-DIAG (see HUBSUBMIT above): same trace for the direct
      * submitter (port-device descriptor fetches bypass the FDO
      * wrapper). Revert after test. */
-    DbgPrint("HUBSUBMIT2 dev %p func %04X len %lu urb %p\n",
+    if (0) DbgPrint("HUBSUBMIT2 dev %p func %04X len %lu urb %p\n",
              DeviceObject,
              (unsigned)Urb->UrbHeader.Function,
              (unsigned long)Urb->UrbHeader.Length,
@@ -344,7 +344,7 @@ USBH_SyncSubmitUrb(IN PDEVICE_OBJECT DeviceObject,
     }
 
     /* TEMP-DIAG (see HUBSUBMIT2 above). */
-    DbgPrint("HUBDONE2 dev %p func %04X status %08X\n",
+    if (0) DbgPrint("HUBDONE2 dev %p func %04X status %08X\n",
              DeviceObject,
              (unsigned)Urb->UrbHeader.Function,
              (unsigned)IoStatusBlock.Status);
@@ -375,12 +375,12 @@ USBH_FdoSyncSubmitUrb(IN PDEVICE_OBJECT FdoDevice,
     /* TEMP-DIAG USB-vs-HW hunt: trace every sync URB submit + result
      * (pipe #5's descriptor fetch never returns on real HW).
      * Revert after test. */
-    DbgPrint("HUBSUBMIT func %04X len %lu buf %p\n",
+    if (0) DbgPrint("HUBSUBMIT func %04X len %lu buf %p\n",
              (unsigned)Urb->UrbHeader.Function,
              (unsigned long)Urb->UrbHeader.Length,
              Urb);
     _st = USBH_SyncSubmitUrb(HubExtension->LowerDevice, Urb);
-    DbgPrint("HUBDONE func %04X status %08X\n",
+    if (0) DbgPrint("HUBDONE func %04X status %08X\n",
              (unsigned)Urb->UrbHeader.Function,
              (unsigned)_st);
     return _st;

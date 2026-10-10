@@ -1143,7 +1143,7 @@ USBPORT_QueueTransferUrb(IN PURB Urb)
 
     /* TEMP-DIAG USB-vs-HW hunt: trace every queued transfer (pipe #5's
      * descriptor fetch never completes on real HW). Revert after. */
-    DbgPrint("URBQUEUE func %04X len %lu ep %02X dev %p urb %p\n",
+    if (0) DbgPrint("URBQUEUE func %04X len %lu ep %02X dev %p urb %p\n",
              (unsigned)Urb->UrbHeader.Function,
              (unsigned long)Urb->UrbControlTransfer.TransferBufferLength,
              (unsigned)(Endpoint ? Endpoint->EndpointProperties.EndpointAddress : 0xFF),

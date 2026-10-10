@@ -1488,7 +1488,7 @@ EHCI_InterruptService(IN PVOID ehciExtension)
         ULONG _n = InterlockedIncrement((PLONG)&EhciIsrEntries);
         if ((_n % 1000000) == 0)
         {
-            DbgPrint("EHCIHB isr %lu true %lu en %08X sts %08X\n",
+            if (0) DbgPrint("EHCIHB isr %lu true %lu en %08X sts %08X\n",
                      (unsigned long)_n,
                      (unsigned long)EhciIsrAcks,
                      (unsigned)IntrEn.AsULONG,
@@ -3171,8 +3171,17 @@ EHCI_PollActiveAsyncEndpoint(IN PEHCI_EXTENSION EhciExtension,
     }
     else
     {
+        ULONG _poll = 0;
         while (TD != CurrentTD)
         {
+            /* Bound the walk: a churn-corrupted (cyclic) TD list used
+             * to hog the DPC past the 1s watchdog. Healthy lists never
+             * get near the bound. */
+            if (++_poll > 1024)
+            {
+                DPRINT1("EHCI_PollActiveAsyncEndpoint: TD walk bound hit, breaking\n");
+                break;
+            }
             ASSERT((TD->TdFlags & EHCI_HCD_TD_FLAG_DUMMY) == 0);
 
             TD->TdFlags |= EHCI_HCD_TD_FLAG_DONE;
@@ -3432,7 +3441,7 @@ EHCI_CheckController(IN PVOID ehciExtension)
             ULONG _sts = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcStatus.AsULONG);
             ULONG _fri = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->FrameIndex);
             ULONG _ien = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcInterruptEnable.AsULONG);
-            DbgPrint("EHCIHB2 hc %p cmd %08X sts %08X ien %08X fr %08X n %lu\n",
+            if (0) DbgPrint("EHCIHB2 hc %p cmd %08X sts %08X ien %08X fr %08X n %lu\n",
                      EhciExtension, _cmd, _sts, _ien, _fri, (unsigned long)_n);
         }
     }
