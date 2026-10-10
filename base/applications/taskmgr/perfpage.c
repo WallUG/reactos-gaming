@@ -123,6 +123,13 @@ static void PerformancePage_SetCpuGraphMode(HWND hDlg)
         CpuHistoryGraphWnds[i] = hChild;
         CpuHistoryGraphCount++;
     }
+    if (CpuHistoryGraphCount < 2)
+    {
+        /* Never leave a blank page (zero-size rect / create failure):
+         * fall back to the single aggregate graph. */
+        PerformancePage_DestroyCpuGraphs();
+        ShowWindow(hPerformancePageCpuUsageHistoryGraph, SW_SHOW);
+    }
 }
 
 void AdjustFrameSize(HWND hCntrl, HWND hDlg, int nXDifference, int nYDifference, int pos)

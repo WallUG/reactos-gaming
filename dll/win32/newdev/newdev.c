@@ -1020,7 +1020,12 @@ ClientSideInstallW(
         goto cleanup;
     }
 
-    ReturnValue = DevInstallW(NULL, NULL, DeviceInstance, ShowWizard ? SW_SHOWNOACTIVATE : SW_HIDE);
+    {
+        /* TEMP-DIAG SMP-PnP hunt (revert): time inside DevInstallW. */
+        DWORD _t0diw = GetTickCount();
+        ReturnValue = DevInstallW(NULL, NULL, DeviceInstance, ShowWizard ? SW_SHOWNOACTIVATE : SW_HIDE);
+        ERR("INSTDIW dev %S took %lu ms (ret %d)\n", DeviceInstance, (unsigned long)(GetTickCount() - _t0diw), (int)ReturnValue);
+    }
     if(!ReturnValue)
     {
         ERR("DevInstallW failed with error %lu\n", GetLastError());
