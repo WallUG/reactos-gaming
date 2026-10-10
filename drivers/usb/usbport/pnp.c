@@ -890,13 +890,12 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
         USBPORT_MiniportInterrupts(FdoDevice, TRUE);
     }
 
-    /* Bisect de ritmo #2 (base 075 que engancha): poll a 50ms; el
-     * re-arme sigue intacto cada tick (sin puertas globales: cada FDO
-     * rearma lo suyo siempre). Si engancha, el ritmo era el factor y
-     * el culpable del 074 fue la puerta %10 compartida; si no,
-     * el poll rápido en sí interfiere y se revierte. */
-    FdoExtension->TimerValue = 50;
-    USBPORT_StartTimer((PVOID)FdoDevice, 50);
+    /* Fase5-SMP ritmo: poll a 8ms. Con la via INTx muerta, cada fase
+     * BOT (CBW/DATA/CSW) esperaba un tick de 50ms (150ms/comando,
+     * medido: ~50 submits/s). A 8ms el techo sube ~6x con carga de
+     * CPU despreciable (CheckController son pocos MMIO). */
+    FdoExtension->TimerValue = 8;
+    USBPORT_StartTimer((PVOID)FdoDevice, 8);
 
     Status = USBPORT_RegisterDeviceInterface(FdoExtension->CommonExtension.LowerPdoDevice,
                                              FdoDevice,
