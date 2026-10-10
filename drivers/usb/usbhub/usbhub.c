@@ -4441,7 +4441,8 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
            Port,
            UsbPortStatus.AsUshort16);
 
-    /* TEMP-DIAG (see HUBPORT above). */
+    /* Bisect: una línea por dispositivo enumerado (veredicto de
+     * enganche en 3 min, ~20 por boot). */
     DbgPrint("HUBCREATE hub %p port %u status %04X\n",
              HubExtension, (unsigned)Port,
              (unsigned)UsbPortStatus.AsUshort16);

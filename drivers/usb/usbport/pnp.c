@@ -890,8 +890,13 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
         USBPORT_MiniportInterrupts(FdoDevice, TRUE);
     }
 
-    FdoExtension->TimerValue = 500;
-    USBPORT_StartTimer((PVOID)FdoDevice, 500);
+    /* Bisect de ritmo #2 (base 075 que engancha): poll a 50ms; el
+     * re-arme sigue intacto cada tick (sin puertas globales: cada FDO
+     * rearma lo suyo siempre). Si engancha, el ritmo era el factor y
+     * el culpable del 074 fue la puerta %10 compartida; si no,
+     * el poll rápido en sí interfiere y se revierte. */
+    FdoExtension->TimerValue = 50;
+    USBPORT_StartTimer((PVOID)FdoDevice, 50);
 
     Status = USBPORT_RegisterDeviceInterface(FdoExtension->CommonExtension.LowerPdoDevice,
                                              FdoDevice,
