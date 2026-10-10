@@ -1141,6 +1141,15 @@ USBPORT_QueueTransferUrb(IN PURB Urb)
     DeviceHandle = Urb->UrbHeader.UsbdDeviceHandle;
     InterlockedDecrement(&DeviceHandle->DeviceHandleLock);
 
+    /* TEMP-DIAG USB-vs-HW hunt: trace every queued transfer (pipe #5's
+     * descriptor fetch never completes on real HW). Revert after. */
+    if (0) DbgPrint("URBQUEUE func %04X len %lu ep %02X dev %p urb %p\n",
+             (unsigned)Urb->UrbHeader.Function,
+             (unsigned long)Urb->UrbControlTransfer.TransferBufferLength,
+             (unsigned)(Endpoint ? Endpoint->EndpointProperties.EndpointAddress : 0xFF),
+             (void *)DeviceHandle,
+             Urb);
+
     USBPORT_FlushPendingTransfers(Endpoint);
 
     DPRINT_URB("... URB TransferBufferLength - %x\n",

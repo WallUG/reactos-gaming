@@ -1408,6 +1408,11 @@ PdoStartDevice(
                                   &_cmd,
                                   FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
                                   sizeof(_cmd));
+            DPRINT1("PCI: INTx %s on %02x:%02x.%x\n",
+                    _lineBased ? "enabled" : "left disabled",
+                    DeviceExtension->PciDevice->BusNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
         }
     }
 

@@ -150,7 +150,7 @@ KiExitTrapDebugChecks(IN PKTRAP_FRAME TrapFrame,
     /* Make sure we have a valid SEH chain */
     if (KiTrapGetExceptionList() == 0)
     {
-        DbgPrint("Exiting with NULL exception chain: %p\n", KeGetPcr()->NtTib.ExceptionList);
+        DbgPrint("Exiting with NULL exception chain: %p\n", KiTrapGetExceptionList());
         __debugbreak();
     }
 

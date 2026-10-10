@@ -248,11 +248,20 @@ RtlInitializeHeapManager(VOID)
 VOID FASTCALL
 CHECK_PAGED_CODE_RTL(char *file, int line)
 {
-  /* APIC SMP bring-up: the stop here wedged boot (PnP-at-DISPATCH
-   * paths hit paged RTL on SMP-HW during USB enumeration); proceed --
-   * a real DISPATCH page fault still bugchecks loudly by itself. */
-  (void)file;
-  (void)line;
+  if(KeGetCurrentIrql() > APC_LEVEL)
+  {
+    /* BISECT 2026-10-09: stop downgraded to loud print (PnP-at-
+     * DISPATCH paths hit paged RTL (NLS) on SMP/UP-HW during USB
+     * enumeration; KDB stops wedge boot with zero diagnostic value,
+     * usually on the single-byte path that touches nothing paged).
+     * Cap output; a real DISPATCH page fault after this still
+     * bugchecks loudly by itself. Revert-or-fix raisers after HW. */
+    static LONG _rtlDbg = 0;
+    if (InterlockedIncrement(&_rtlDbg) <= 16)
+    {
+        DbgPrint("%s:%i: Pagable code called at IRQL > APC_LEVEL (%u)\n", file, line, KeGetCurrentIrql());
+    }
+  }
 }
 #endif
 

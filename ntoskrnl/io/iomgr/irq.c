@@ -39,9 +39,15 @@ IoConnectInterrupt(OUT PKINTERRUPT *InterruptObject,
     CCHAR Count = 0;
     KAFFINITY Affinity;
 
-    /* APIC SMP bring-up: PAGED_CODE tier removed here (PnP workers
-     * reach IoConnectInterrupt above APC_LEVEL on SMP-HW; the connect
-     * body is non-paged and safe). */
+    /* BISECT 2026-10-09: PAGED_CODE downgraded (PnP workers reach
+     * here above APC on SMP-HW (seen IRQL 27); the connect body is
+     * non-paged and safe, the macro only stops boot in KDB. Loud
+     * print instead; revert-or-fix the raiser after HW validates. */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        DPRINT1("IRQCONN-IRQL: IoConnectInterrupt at irql %u (raiser upstream)\n",
+                (unsigned)KeGetCurrentIrql());
+    }
 
     /* Assume failure */
     *InterruptObject = NULL;
@@ -103,6 +109,11 @@ IoConnectInterrupt(OUT PKINTERRUPT *InterruptObject,
         /* Connect it */
         if (!KeConnectInterrupt(InterruptUsed))
         {
+            /* TEMP-DIAG ATA-vs-HW hunt: who fails to connect (revert after test) */
+            DbgPrint("IRQCONN FAIL vector %02lx irql %u mode %s share %u cpu %u\n",
+                     (unsigned long)Vector, (unsigned)Irql,
+                     (InterruptMode == LevelSensitive) ? "level" : "edge",
+                     (unsigned)ShareVector, (unsigned)Count);
             /* Check how far we got */
             if (FirstRun)
             {
@@ -133,6 +144,11 @@ IoConnectInterrupt(OUT PKINTERRUPT *InterruptObject,
 
     /* Return success */
     *InterruptObject = &IoInterrupt->FirstInterrupt;
+    /* TEMP-DIAG ATA-vs-HW hunt: every connected vector (revert after test) */
+    DbgPrint("IRQCONN OK vector %02lx irql %u mode %s share %u\n",
+             (unsigned long)Vector, (unsigned)Irql,
+             (InterruptMode == LevelSensitive) ? "level" : "edge",
+             (unsigned)ShareVector);
     return STATUS_SUCCESS;
 }
 

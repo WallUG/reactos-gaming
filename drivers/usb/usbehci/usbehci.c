@@ -1134,6 +1134,12 @@ EHCI_TakeControlHC(IN PEHCI_EXTENSION EhciExtension)
     KeQuerySystemTime(&EndTime);
     EndTime.QuadPart += 100 * 10000;
 
+    /* TEMP-DIAG USB-vs-HW hunt (keep the DPRINT1s until HW validates). */
+    DPRINT1("EHCI_TakeControlHC: EECP %02X BiosOwned %u OsOwned %u\n",
+            (unsigned)OffsetEECP,
+            (unsigned)LegacyCapability.BiosOwnedSemaphore,
+            (unsigned)LegacyCapability.OsOwnedSemaphore);
+
     do
     {
         RegPacket.UsbPortReadWriteConfigSpace(EhciExtension,
@@ -1150,10 +1156,16 @@ EHCI_TakeControlHC(IN PEHCI_EXTENSION EhciExtension)
          * completes for the OS). */
         if (LegacyCapability.BiosOwnedSemaphore == 0)
         {
+            DPRINT1("EHCI_TakeControlHC: ownership acquired\n");
             break;
         }
     }
     while (CurrentTime.QuadPart <= EndTime.QuadPart);
+
+    if (LegacyCapability.BiosOwnedSemaphore)
+    {
+        DPRINT1("EHCI_TakeControlHC: TIMEOUT, BIOS still owns the HC!\n");
+    }
 
     return MP_STATUS_SUCCESS;
 }
@@ -1438,6 +1450,11 @@ EHCI_HardwarePresent(IN PEHCI_EXTENSION EhciExtension,
     return FALSE;
 }
 
+/* TEMP-DIAG USB-vs-HW hunt: ISR heartbeat counters (see
+ * EHCI_InterruptService). Revert after test. */
+static volatile ULONG EhciIsrEntries = 0;
+static volatile ULONG EhciIsrAcks = 0;
+
 BOOLEAN
 NTAPI
 EHCI_InterruptService(IN PVOID ehciExtension)
@@ -1462,6 +1479,22 @@ EHCI_InterruptService(IN PVOID ehciExtension)
 
     IntrEn.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG);
     IntrSts.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
+
+    /* TEMP-DIAG USB-vs-HW hunt: heartbeat (entries/acks/last status
+     * every 1M entries; quiet when idle, ~1/2s in storms). Tells
+     * whether the HC asserts anything post-pipe-5 and whether the
+     * ISR acks it. Revert after test. */
+    {
+        ULONG _n = InterlockedIncrement((PLONG)&EhciIsrEntries);
+        if ((_n % 1000000) == 0)
+        {
+            if (0) DbgPrint("EHCIHB isr %lu true %lu en %08X sts %08X\n",
+                     (unsigned long)_n,
+                     (unsigned long)EhciIsrAcks,
+                     (unsigned)IntrEn.AsULONG,
+                     (unsigned)IntrSts.AsULONG);
+        }
+    }
 
     iStatus.AsULONG = (IntrEn.AsULONG & IntrSts.AsULONG) & EHCI_INTERRUPT_MASK;
 
@@ -1496,6 +1529,9 @@ EHCI_InterruptService(IN PVOID ehciExtension)
     }
 
     EhciExtension->FrameIndex = FrameIndex;
+
+    /* TEMP-DIAG (see heartbeat above). */
+    InterlockedIncrement((PLONG)&EhciIsrAcks);
 
     return TRUE;
 }
@@ -3391,6 +3427,24 @@ EHCI_CheckController(IN PVOID ehciExtension)
     PEHCI_EXTENSION EhciExtension = ehciExtension;
 
     //DPRINT_EHCI("EHCI_CheckController: ... \n");
+
+    /* TEMP-DIAG USB-vs-HW hunt: HC liveness every ~5s (called from
+     * usbport's 500ms timer DPC, runs even with zero interrupts).
+     * Tells RS/ASE/PSE, halted/errors, pending status, frame
+     * advance at the pipe-5 wedge. Revert after test. */
+    {
+        static volatile ULONG _chkN = 0;
+        ULONG _n = InterlockedIncrement((PLONG)&_chkN);
+        if ((_n % 10) == 0)
+        {
+            ULONG _cmd = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcCommand.AsULONG);
+            ULONG _sts = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcStatus.AsULONG);
+            ULONG _fri = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->FrameIndex);
+            ULONG _ien = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcInterruptEnable.AsULONG);
+            if (0) DbgPrint("EHCIHB2 hc %p cmd %08X sts %08X ien %08X fr %08X n %lu\n",
+                     EhciExtension, _cmd, _sts, _ien, _fri, (unsigned long)_n);
+        }
+    }
 
     if (EhciExtension->IsStarted)
         EHCI_HardwarePresent(EhciExtension, TRUE);
