@@ -3550,6 +3550,34 @@ EHCI_CheckController(IN PVOID ehciExtension)
 
     if (EhciExtension->IsStarted)
         EHCI_HardwarePresent(EhciExtension, TRUE);
+
+    /* 088 FIX (poll-seeded completion): if the HC holds pending+enabled
+     * status that no ISR collected (dead/masked INTx path under APIC on
+     * some boards: INT stuck=1, ISR never fires, first transfer wedges
+     * although the 50ms poll runs), do the ISR's job: ack (W1C), stash,
+     * and seed the normal DPC machinery via SOFT_INTERRUPT (same call
+     * EHCI_InterruptNextSOF makes). Trigger mirrors
+     * EHCI_InterruptService (en&sts&mask). Self-healing and idempotent:
+     * where ISRs flow there is nothing pending and this never engages;
+     * where an interrupt was missed it heals it at poll granularity. */
+    if (EhciExtension->IsStarted)
+    {
+        PEHCI_HW_REGISTERS _op = EhciExtension->OperationalRegs;
+        ULONG _ee = READ_REGISTER_ULONG(&_op->HcInterruptEnable.AsULONG);
+        ULONG _ss = READ_REGISTER_ULONG(&_op->HcStatus.AsULONG);
+        ULONG _pp = (_ee & _ss) & EHCI_INTERRUPT_MASK;
+        if (_pp)
+        {
+            static volatile LONG _seed = 0;
+            WRITE_REGISTER_ULONG(&_op->HcStatus.AsULONG, _pp);
+            EhciExtension->InterruptStatus.AsULONG |= _pp;
+            RegPacket.UsbPortInvalidateController(EhciExtension,
+                                                  USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT);
+            if (InterlockedIncrement((PLONG)&_seed) <= 4)
+                DbgPrint("USSEED hc %p bits %08X #%ld\n",
+                         EhciExtension, _pp, (long)_seed);
+        }
+    }
 }
 
 ULONG
