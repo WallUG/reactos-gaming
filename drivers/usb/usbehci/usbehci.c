@@ -2332,7 +2332,8 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
         {
             LARGE_INTEGER _t;
             KeQueryTickCount(&_t);
-            DbgPrint("BULKSUB ep %02X len %lu firstDT %u tick %lu\n",
+            DbgPrint("BULKSUB eps %p ep %02X len %lu firstDT %u tick %lu\n",
+                     EhciTransfer,
                      (unsigned)EhciEndpoint->EndpointProperties.EndpointAddress,
                      (unsigned long)TransferParameters->TransferBufferLength,
                      (unsigned)FirstTD->HwTD.Token.DataToggle,
@@ -3027,7 +3028,8 @@ EHCI_GetErrorFromTD(IN PEHCI_HCD_TD TD)
         {
             LARGE_INTEGER _t;
             KeQueryTickCount(&_t);
-            DbgPrint("BULKHLT raw %08X dt %u pid %u cerr %u bytes %u active %u tick %lu\n",
+            DbgPrint("BULKHLT ept %p raw %08X dt %u pid %u cerr %u bytes %u active %u tick %lu\n",
+                     TD->EhciTransfer,
                      Token.AsULONG,
                      (unsigned)Token.DataToggle,
                      (unsigned)Token.PIDCode,
