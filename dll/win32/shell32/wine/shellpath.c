@@ -36,6 +36,7 @@
 #include <shlobj.h>
 #include <undocshell.h>
 #include <shlwapi.h>
+#include <wine/unicode.h>
 #include <sddl.h>
 #include <strsafe.h>
 #include <wine/debug.h>
@@ -2734,6 +2735,53 @@ HRESULT WINAPI SHGetFolderPathW(
     return hr;
 }
 
+/* Live-ES: el perfil live trae nombres ingleses en disco
+ * ("Start Menu", "Desktop"...) y los lookups localizados
+ * ("Menú Inicio", "Escritorio", compuestos "Menú Inicio\Programas")
+ * ni existen ni se dejan crear en ramdisk. Reescribe szBuildPath a la
+ * forma inglesa (quita <depth> hojas, anexa relativo ingles).
+ * Solo cubre carpetas de perfil usuario/comun con esqueleto ingles;
+ * el resto de idiomas con igual profundidad funciona igual. Devuelve
+ * TRUE si reescribio. Solo para CSIDL base (sin pszSubPath). */
+static BOOL
+Shellpath_SwapToEnglishLeaf(IN DWORD folder, IN OUT LPWSTR szBuildPath)
+{
+    static const struct { DWORD folder; UINT depth; LPCWSTR rel; } Map[] = {
+        { 0x02, 2, L"Start Menu\\Programs" },
+        { 0x07, 3, L"Start Menu\\Programs\\Startup" },
+        { 0x0b, 1, L"Start Menu" },
+        { 0x10, 1, L"Desktop" },
+        { 0x16, 1, L"Start Menu" },
+        { 0x17, 2, L"Start Menu\\Programs" },
+        { 0x18, 3, L"Start Menu\\Programs\\Startup" },
+        { 0x19, 1, L"Desktop" },
+    };
+    UINT i, d;
+    SIZE_T rootLen, relLen;
+    WCHAR *slash;
+
+    for (i = 0; i < ARRAY_SIZE(Map); i++)
+    {
+        if (folder != Map[i].folder)
+            continue;
+        /* Quita <depth> hojas finales (sin pasar de "X:\") */
+        for (d = 0; d < Map[i].depth; d++)
+        {
+            slash = strrchrW(szBuildPath, L'\\');
+            if (!slash || slash <= szBuildPath + 2)
+                return FALSE;
+            *slash = UNICODE_NULL;
+        }
+        relLen = wcslen(Map[i].rel);
+        rootLen = wcslen(szBuildPath);
+        if (rootLen + 1 + relLen >= MAX_PATH)
+            return FALSE;
+        PathAppendW(szBuildPath, Map[i].rel);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 HRESULT WINAPI SHGetFolderPathAndSubDirA(
 	HWND hwndOwner,    /* [I] owner window */
 	int nFolder,       /* [I] CSIDL identifying the folder */
@@ -2902,7 +2950,24 @@ HRESULT WINAPI SHGetFolderPathAndSubDirW(
     /* if we don't care about existing directories we are ready */
     if(nFolder & CSIDL_FLAG_DONT_VERIFY) goto end;
 
-    if (PathFileExistsW(szBuildPath)) goto end;
+    if (!PathFileExistsW(szBuildPath))
+    {
+        /* Live-ES: el perfil live trae nombres ingleses en disco y
+         * el lookup localizado no existe. CStartMenu
+         * (SHGetSpecialFolderLocation) NO pide CREATE, asi que el fallback
+         * tiene que correr aqui, antes del check de CREATE. Ingles no
+         * cambia: su nombre coincide al primer intento. Solo CSIDL base
+         * (sin subpath: con subpath la profundidad no cuadra). */
+        if (!pszSubPath && Shellpath_SwapToEnglishLeaf(folder, szBuildPath) &&
+            PathFileExistsW(szBuildPath))
+        {
+            if (pszPath)
+                strcpyW(pszPath, szBuildPath);
+            goto end;
+        }
+    }
+    else
+        goto end;
 
     /* not existing but we are not allowed to create it.  The return value
      * is verified against shell32 version 6.0.
@@ -2913,14 +2978,23 @@ HRESULT WINAPI SHGetFolderPathAndSubDirW(
         goto end;
     }
 
-    /* create directory/directories */
+    /* create directory/directories (primero el localizado, luego el ingles
+     * como ultimo recurso para llamadores con CREATE) */
     ret = SHCreateDirectoryExW(hwndOwner, szBuildPath, NULL);
+    if (ret && ret != ERROR_ALREADY_EXISTS && !pszSubPath &&
+        Shellpath_SwapToEnglishLeaf(folder, szBuildPath))
+    {
+        ret = SHCreateDirectoryExW(hwndOwner, szBuildPath, NULL);
+    }
     if (ret && ret != ERROR_ALREADY_EXISTS)
     {
         ERR("Failed to create directory %s.\n", debugstr_w(szBuildPath));
         hr = E_FAIL;
         goto end;
     }
+    /* El path puede haber cambiado por el fallback ingles: refresca salida */
+    if (pszPath)
+        strcpyW(pszPath, szBuildPath);
 
     TRACE("Created missing system directory %s\n", debugstr_w(szBuildPath));
 
