@@ -367,7 +367,9 @@ GraphCtrl_WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             else if (hWnd == hPerformancePageMemUsageHistoryGraph)
                 graph = &PerformancePageMemUsageHistoryGraph;
             else
-                return 0;
+                graph = (PTM_GRAPH_CONTROL)(LONG_PTR)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+
+            if (!graph) return 0;
 
             if (HIWORD(lParam) != graph->BitmapHeight)
             {
@@ -389,7 +391,9 @@ GraphCtrl_WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             else if (hWnd == hPerformancePageMemUsageHistoryGraph)
                 graph = &PerformancePageMemUsageHistoryGraph;
             else
-                return 0;
+                graph = (PTM_GRAPH_CONTROL)(LONG_PTR)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+
+            if (!graph) return 0;
 
             hdc = BeginPaint(hWnd, &ps);
             GetClientRect(hWnd, &rcClient);
