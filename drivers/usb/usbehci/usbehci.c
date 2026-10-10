@@ -1174,6 +1174,25 @@ EHCI_TakeControlHC(IN PEHCI_EXTENSION EhciExtension)
         DPRINT1("EHCI_TakeControlHC: TIMEOUT, BIOS still owns the HC!\n");
     }
 
+    /* Real storm fix attempt: silence BIOS SMI (USB legacy emulation).
+     * Taking the semaphores is not enough: BIOSes leave the SMI
+     * enables set in USBLEGCTLSTS (EECP+4) and SMM keeps trapping USB
+     * activity and/or asserting the shared level line with no
+     * OS-visible status bit -- a stuck level re-firing on every EOI
+     * (the 474K/s onset flood from the very first ISR, before any OS
+     * traffic, on both controllers). Linux parity: an OS that takes
+     * ownership disables all SMI (write USBLEGCTLSTS = 0; W1C status
+     * bits are unaffected by writing 0). If the storm onset vanishes,
+     * this was the culprit; if identical, revert just this hunk. */
+    {
+        ULONG CtlSts = 0;
+        RegPacket.UsbPortReadWriteConfigSpace(EhciExtension,
+                                              FALSE,
+                                              &CtlSts,
+                                              (UCHAR)(OffsetEECP + 4),
+                                              sizeof(CtlSts));
+    }
+
     return MP_STATUS_SUCCESS;
 }
 
