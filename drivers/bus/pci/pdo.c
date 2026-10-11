@@ -659,6 +659,7 @@ PdoQueryResourceRequirements(
 
         if (PciConfig.u.type0.InterruptPin != 0)
         {
+            ULONG _gsi;
             Descriptor->Option = 0; /* Required */
             Descriptor->Type = CmResourceTypeInterrupt;
             Descriptor->ShareDisposition = CmResourceShareShared;
@@ -666,6 +667,18 @@ PdoQueryResourceRequirements(
 
             Descriptor->u.Interrupt.MinimumVector = 0;
             Descriptor->u.Interrupt.MaximumVector = 0xFF;
+            /* Fase5-SMP: fijar el GSI PIRQ para que el arbitro no reubique
+             * (HDA 16->0x14 en fase usuario = pin vacio + storm a1).
+             * Solo en APIC; si no hay GSI, rango abierto como antes. */
+            if (HalIsApicMode() &&
+                PciPirqToGsi(DeviceExtension->PciDevice->BusNumber,
+                             DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                             PciConfig.u.type0.InterruptPin,
+                             &_gsi))
+            {
+                Descriptor->u.Interrupt.MinimumVector = _gsi;
+                Descriptor->u.Interrupt.MaximumVector = _gsi;
+            }
         }
     }
     else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_BRIDGE_TYPE)
