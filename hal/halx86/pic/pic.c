@@ -1062,8 +1062,14 @@ HalRearmSystemInterrupt(IN ULONG Vector)
     PIC_MASK PicMask;
 
     /* Clear ONLY the mask bit (no reprogram). Self-healing for the
-     * kernel storm guard on driver connect. Storm-held: no resucitar. */
-    if (HalpStormHeld[Vector & 0xFF]) return;
+     * kernel storm guard on driver connect. Storm-held: no resucitar,
+     * salvo probation cada 1000 intentos (ver apic.c). */
+    if (HalpStormHeld[Vector & 0xFF])
+    {
+        static ULONG _prob = 0;
+        if (++_prob % 1000 != 0) return;
+        HalpStormHeld[Vector & 0xFF] = 0;
+    }
     IrqMask = 1 << (Vector - PRIMARY_VECTOR_BASE);
 
     /* Disable interrupts */

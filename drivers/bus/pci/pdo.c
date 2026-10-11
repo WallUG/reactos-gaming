@@ -173,6 +173,16 @@ PciPirqToGsi(
         DbgPrint("PIRPROBE rcba %08x usable %d\n", RcbaRaw, Usable);
         /* Congelar ruteo antes de que nadie lea letras (ver arriba). */
         if (Usable) PciFreezePirqRouting(DxxIrBase);
+        /* TEMP-115: mapa completo DxxIR+ROUT (cazar al asertor de B). */
+        if (Usable)
+        {
+            DbgPrint("PIRMAP %08x %08x %08x %08x %08x %08x %08x %08x %08x / %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                     DxxIrBase[0], DxxIrBase[1], DxxIrBase[2],
+                     DxxIrBase[3], DxxIrBase[4], DxxIrBase[5],
+                     DxxIrBase[6], DxxIrBase[7], DxxIrBase[8],
+                     PciReadLpcRc(0), PciReadLpcRc(1), PciReadLpcRc(2), PciReadLpcRc(3),
+                     PciReadLpcRc(4), PciReadLpcRc(5), PciReadLpcRc(6), PciReadLpcRc(7));
+        }
     }
     if (!Usable) return FALSE;
 

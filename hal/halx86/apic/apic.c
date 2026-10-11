@@ -993,7 +993,14 @@ HalRearmSystemInterrupt(
      * or vector unmapped. Storm-held: no resucitar. */
     IOAPIC_REDIRECTION_REGISTER ReDirReg;
     UCHAR Index;
-    if (HalpStormHeld[Vector & 0xFF]) return;
+    /* Storm-held: no resucitar, salvo probation cada 1000 intentos (si el
+     * asertor se aquieto, se recupera; si no, el guard re-retiene). */
+    if (HalpStormHeld[Vector & 0xFF])
+    {
+        static ULONG _prob = 0;
+        if (++_prob % 1000 != 0) return;
+        HalpStormHeld[Vector & 0xFF] = 0;
+    }
     if (Vector >= RTL_NUMBER_OF(HalpVectorToIndex)) return;
     Index = HalpVectorToIndex[Vector];
     if (Index >= APIC_MAX_IRQ) return;
