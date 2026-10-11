@@ -890,12 +890,12 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
         USBPORT_MiniportInterrupts(FdoDevice, TRUE);
     }
 
-    /* Fase5-SMP ritmo: poll a 8ms. Con la via INTx muerta, cada fase
-     * BOT (CBW/DATA/CSW) esperaba un tick de 50ms (150ms/comando,
-     * medido: ~50 submits/s). A 8ms el techo sube ~6x con carga de
-     * CPU despreciable (CheckController son pocos MMIO). */
-    FdoExtension->TimerValue = 8;
-    USBPORT_StartTimer((PVOID)FdoDevice, 8);
+    /* Fase5-SMP ritmo: poll a 2ms. A 8ms el throughput se clavo en
+     * ~31 submits/s (~30ms/comando: 3 fases x 1 tick). La INTx sigue
+     * muerta y el poll es el unico colector; a 2ms el techo sube ~4x
+     * con carga aun despreciable. EHCIST recadenciado a ~10s. */
+    FdoExtension->TimerValue = 2;
+    USBPORT_StartTimer((PVOID)FdoDevice, 2);
 
     Status = USBPORT_RegisterDeviceInterface(FdoExtension->CommonExtension.LowerPdoDevice,
                                              FdoDevice,

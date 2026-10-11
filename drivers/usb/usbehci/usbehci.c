@@ -3538,7 +3538,7 @@ EHCI_CheckController(IN PVOID ehciExtension)
     {
         static volatile ULONG _chkN = 0;
         ULONG _n = InterlockedIncrement((PLONG)&_chkN);
-        if ((_n % 1250) == 0)
+        if ((_n % 5000) == 0)
         {
             ULONG _cmd = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcCommand.AsULONG);
             ULONG _sts = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcStatus.AsULONG);
