@@ -602,27 +602,6 @@ ApicInitializeIOApic(VOID)
         WRITE_PORT_UCHAR((PUCHAR)0x23, 0x01);
     }
 
-    /* TEMP-105: diagnostico ruteo: readback IMCR + router PIRQ del LPC
-     * (bus0 dev31 fn0, RC A-D 0x60-63, E-H 0x68-6B). 0x80 = sin rutear. */
-    {
-        UCHAR ImcrRb, PirqRc[8];
-        ULONG i, Reg, Addr;
-        const UCHAR Regs[8] = {0x60, 0x61, 0x62, 0x63, 0x68, 0x69, 0x6A, 0x6B};
-        WRITE_PORT_UCHAR((PUCHAR)0x22, 0x70);
-        ImcrRb = READ_PORT_UCHAR((PUCHAR)0x23);
-        for (i = 0; i < 8; i++)
-        {
-            Reg = Regs[i];
-            Addr = 0x8000F800 | (Reg & 0xFC);
-            WRITE_PORT_ULONG((PULONG)0xCF8, Addr);
-            PirqRc[i] = (UCHAR)((READ_PORT_ULONG((PULONG)0xCFC) >> ((Reg & 3) * 8)) & 0xFF);
-        }
-        DbgPrint("IMCRDBG present %d rb %02x RC %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                 HalpImcrPresent, ImcrRb,
-                 PirqRc[0], PirqRc[1], PirqRc[2], PirqRc[3],
-                 PirqRc[4], PirqRc[5], PirqRc[6], PirqRc[7]);
-    }
-
     /* Enable the timer interrupt (but keep it masked) */
     ReDirReg.Vector = APIC_CLOCK_VECTOR;
     ReDirReg.MessageType = APIC_MT_Fixed;

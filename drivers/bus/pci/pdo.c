@@ -26,6 +26,75 @@
 
 /*** PRIVATE *****************************************************************/
 
+/* Fase5-SMP: PIR->APIC esta cableado fijo en silicio ICH/PCH (PIRQA->GSI16
+ * ... PIRQH->GSI23); los PIRQ[n]_ROUT solo mandan al PIC. El InterruptLine
+ * (3Ch) y los links _PRT traen IRQs PIC (10/11): como pines IOAPIC son
+ * cables muertos (mudo total en H81; QEMU entrega porque su router si
+ * alimenta 0-15). Para internos del bus 0, leer la letra en DxxIR via
+ * RCBA (D31IR=RCBA+0x3140, un dword por dispositivo) y reportar 16+letra.
+ * Solo si RCBA+DxxIR verifican (enable, base sana, bytes <= 7); si no,
+ * FALSE y conducta anterior. */
+static BOOLEAN
+PciPirqToGsi(
+    _In_ ULONG BusNumber,
+    _In_ ULONG DeviceNumber,
+    _In_ UCHAR InterruptPin,
+    _Out_ ULONG *Gsi)
+{
+    static BOOLEAN Probed = FALSE;
+    static BOOLEAN Usable = FALSE;
+    static volatile ULONG *DxxIrBase = NULL;
+    static const UCHAR Devs[] = {31, 30, 29, 28, 27, 26, 25, 22, 20};
+    PCI_SLOT_NUMBER LpcSlot;
+    ULONG RcbaRaw = 0, Size, i, Idx;
+    PHYSICAL_ADDRESS PhysAddr;
+    ULONG DxxIr;
+    UCHAR Letter;
+
+    if (BusNumber != 0) return FALSE;
+    if (InterruptPin < 1 || InterruptPin > 4) return FALSE;
+
+    for (i = 0; i < sizeof(Devs); i++)
+    {
+        if (Devs[i] == DeviceNumber) break;
+    }
+    if (i == sizeof(Devs)) return FALSE;
+    Idx = i;
+
+    if (!Probed)
+    {
+        Probed = TRUE;
+        LpcSlot.u.AsULONG = 0;
+        LpcSlot.u.bits.DeviceNumber = 31;
+        LpcSlot.u.bits.FunctionNumber = 0;
+        Size = HalGetBusDataByOffset(PCIConfiguration,
+                                     0,
+                                     LpcSlot.u.AsULONG,
+                                     &RcbaRaw,
+                                     0xF0,
+                                     sizeof(RcbaRaw));
+        if (Size == sizeof(RcbaRaw) &&
+            (RcbaRaw & 1) &&
+            (RcbaRaw & 0xFFFFC000) != 0 &&
+            (RcbaRaw & 0xFFFFC000) != 0xFFFFC000)
+        {
+            PhysAddr.QuadPart = (ULONGLONG)(RcbaRaw & 0xFFFFC000);
+            DxxIrBase = MmMapIoSpace(PhysAddr, 0x40, MmNonCached);
+            if (DxxIrBase != NULL) Usable = TRUE;
+        }
+        DbgPrint("PIRPROBE rcba %08x usable %d\n", RcbaRaw, Usable);
+    }
+    if (!Usable) return FALSE;
+
+    DxxIr = DxxIrBase[Idx];
+    if (DxxIr & 0xF8F8F8F8) return FALSE; /* letras 0-7 o nada */
+    Letter = (UCHAR)((DxxIr >> ((InterruptPin - 1) * 8)) & 0x7);
+    *Gsi = 16 + Letter;
+    DbgPrint("PIRPROG bus 0 dev %lu pin %d -> PIRQ%c -> GSI %lu\n",
+             DeviceNumber, InterruptPin, 'A' + Letter, *Gsi);
+    return TRUE;
+}
+
 static NTSTATUS
 PdoQueryDeviceText(
     IN PDEVICE_OBJECT DeviceObject,
@@ -871,11 +940,21 @@ PdoQueryResources(
             (PciConfig.u.type0.InterruptLine != 0) &&
             (PciConfig.u.type0.InterruptLine != 0xFF))
         {
+            ULONG _irq = PciConfig.u.type0.InterruptLine, _gsi;
             Descriptor->Type = CmResourceTypeInterrupt;
             Descriptor->ShareDisposition = CmResourceShareShared;
             Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-            Descriptor->u.Interrupt.Level = PciConfig.u.type0.InterruptLine;
-            Descriptor->u.Interrupt.Vector = PciConfig.u.type0.InterruptLine;
+            /* En APIC el cable real es 16+letra PIRQ (ver PciPirqToGsi);
+             * el InterruptLine es el ruteo PIC y apunta a pines muertos. */
+            if (PciPirqToGsi(DeviceExtension->PciDevice->BusNumber,
+                             DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                             PciConfig.u.type0.InterruptPin,
+                             &_gsi))
+            {
+                _irq = _gsi;
+            }
+            Descriptor->u.Interrupt.Level = _irq;
+            Descriptor->u.Interrupt.Vector = _irq;
             Descriptor->u.Interrupt.Affinity = 0xFFFFFFFF;
         }
 
