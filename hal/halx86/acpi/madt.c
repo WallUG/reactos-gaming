@@ -37,6 +37,10 @@
  * the IOAPIC RTE (board wiring wins); conforms (0) keeps the driver. */
 UCHAR HalpPicPolarity[16] = {0};
 UCHAR HalpPicTrigger[16] = {0};
+/* MADT dice dual-8259 (PCAT_COMPAT): existe IMCR y hay que llevarlo a
+ * modo simetrico, si no los PIRQs van al 8259 y los pines IOAPIC quedan
+ * ociosos (floods con polaridad-high, silencio con low). */
+BOOLEAN HalpImcrPresent = FALSE;
 
 /* GLOBALS ********************************************************************/
 
@@ -103,6 +107,9 @@ HalpParseApicTables(
 #endif
 
     HalpApicInfoTable.LocalApicPA = MadtTable->Address;
+
+    if (MadtTable->Flags & ACPI_MADT_PCAT_COMPAT)
+        HalpImcrPresent = TRUE;
 
     AcpiHeader = (ACPI_SUBTABLE_HEADER *)((ULONG_PTR)MadtTable + sizeof(*MadtTable));
     TableEnd = (ULONG_PTR)MadtTable + MadtTable->Header.Length;

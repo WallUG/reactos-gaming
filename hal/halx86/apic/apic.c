@@ -34,6 +34,7 @@ extern PPROCESSOR_IDENTITY HalpProcessorIdentity;
  * still link and behave as before: identity routing, driver Mode). */
 __attribute__((weak)) ULONG HalpPicVectorRedirect[16] =
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+__attribute__((weak)) BOOLEAN HalpImcrPresent = FALSE;
 __attribute__((weak)) UCHAR HalpPicPolarity[16] = {0};
 __attribute__((weak)) UCHAR HalpPicTrigger[16] = {0};
 
@@ -586,6 +587,19 @@ ApicInitializeIOApic(VOID)
     for (Vector = 0; Vector <= 255; Vector++)
     {
         HalpVectorToIndex[Vector] = APIC_FREE_VECTOR;
+    }
+
+    /* Fase5-SMP IMCR: el HAL MP lo programa (EnableApicMode) pero la via
+     * ACPI jamas lo hizo: el chipset queda en ruteo PIC (PIRQs al 8259,
+     * con LINT0 enmascarado a ningun lado; pines IOAPIC ociosos en alto).
+     * Eso explica floods con polaridad-high, silencio con low, PIC bien
+     * y QEMU bien (sin gate IMCR). Solo con dual-8259 (MADT PCAT_COMPAT,
+     * regla Linux: sin PICs no hay IMCR que programar). LINT0 sigue
+     * enmascarado: sin doble entrega. */
+    if (HalpImcrPresent)
+    {
+        WRITE_PORT_UCHAR((PUCHAR)0x22, 0x70);
+        WRITE_PORT_UCHAR((PUCHAR)0x23, 0x01);
     }
 
     /* Enable the timer interrupt (but keep it masked) */
