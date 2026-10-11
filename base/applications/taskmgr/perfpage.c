@@ -626,21 +626,40 @@ static void PerformancePage_LayoutCpuGraphs(HWND hDlg)
     MapWindowPoints(NULL, hDlg, (LPPOINT)&rc, 2);
     GetClientRect(hDlg, &rcd);
     (void)rcd;
-    ShowWindow(hPerformancePageCpuUsageHistoryGraph, SW_HIDE);
+    /* Rejilla estilo Windows: cuasi-cuadrada (cols = techo(sqrt(n))),
+     * con gap de 2px. Si no caben, se vuelve a la vista agregada. */
     {
-        LONG h = (rc.bottom - rc.top - (LONG)(ncpu - 1) * 2) / (LONG)ncpu;
-        LONG y = rc.top;
+        ULONG cols = 1, rows, c, r;
+        LONG cw, ch;
+        while (cols * cols < ncpu) cols++;
+        rows = (ncpu + cols - 1) / cols;
+        cw = (rc.right - rc.left - (LONG)(cols - 1) * 2) / (LONG)cols;
+        ch = (rc.bottom - rc.top - (LONG)(rows - 1) * 2) / (LONG)rows;
+        if (cw < 8 || ch < 8)
+        {
+            for (i = 0; i < CpuGraphActive && i < MAX_CPU_GRAPHS; i++)
+                if (CpuHistoryWnds[i]) ShowWindow(CpuHistoryWnds[i], SW_HIDE);
+            ShowWindow(hPerformancePageCpuUsageHistoryGraph, SW_SHOW);
+            InvalidateRect(hPerformancePageCpuUsageHistoryGraph, NULL, FALSE);
+            return;
+        }
+        ShowWindow(hPerformancePageCpuUsageHistoryGraph, SW_HIDE);
         for (i = 0; i < ncpu; i++)
         {
+            LONG x, y, w, hh;
             if (!CpuHistoryWnds[i]) continue;
-            SetWindowPos(CpuHistoryWnds[i], NULL, rc.left, y,
-                         rc.right - rc.left, (i + 1 == ncpu) ? (rc.bottom - y) : h,
+            c = i % cols;
+            r = i / cols;
+            x = rc.left + (LONG)c * (cw + 2);
+            y = rc.top + (LONG)r * (ch + 2);
+            w = (c + 1 == cols) ? (rc.right - x) : cw;
+            hh = (r + 1 == rows) ? (rc.bottom - y) : ch;
+            SetWindowPos(CpuHistoryWnds[i], NULL, x, y, w, hh,
                          SWP_NOACTIVATE | SWP_NOZORDER);
-            if (CpuHistoryGraphs[i].BitmapHeight != ((i + 1 == ncpu) ? (rc.bottom - y) : h))
-                GraphCtrl_RedrawOnHeightChange(&CpuHistoryGraphs[i], (i + 1 == ncpu) ? (rc.bottom - y) : h);
+            if (CpuHistoryGraphs[i].BitmapHeight != hh)
+                GraphCtrl_RedrawOnHeightChange(&CpuHistoryGraphs[i], hh);
             ShowWindow(CpuHistoryWnds[i], SW_SHOW);
             InvalidateRect(CpuHistoryWnds[i], NULL, FALSE);
-            y += h + 2;
         }
     }
 }
