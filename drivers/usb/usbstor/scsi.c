@@ -150,8 +150,9 @@ USBSTOR_DataPhaseWorkItemRoutine(
     PUSBSTOR_DATA_PHASE_CTX Ctx = (PUSBSTOR_DATA_PHASE_CTX)Context;
     LARGE_INTEGER DueTime;
 
-    DueTime.QuadPart = -3 * 10000; /* 3ms (PIC paceado por IRQ va limpio
-                                    * con ~1ms; margen 3x, latencia minima) */
+    DueTime.QuadPart = -1 * 10000; /* 1ms: PIC paceado por IRQ va limpio
+                                    * con ~1ms; con STALLs curados (halts~0)
+                                    * basta el minimo. */
     KeDelayExecutionThread(KernelMode, FALSE, &DueTime);
 
     USBSTOR_IssueBulkOrInterruptRequest(Ctx->FdoExtension,

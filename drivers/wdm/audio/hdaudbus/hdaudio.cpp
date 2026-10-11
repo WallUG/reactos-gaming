@@ -12,7 +12,10 @@ NTSTATUS HDA_WaitForTransfer(
 	SklHdAudBusPrint(DEBUG_LEVEL_VERBOSE, DBG_IOCTL, "%s called (Count: %d)!\n", __func__, Count);
 
 	LARGE_INTEGER Timeout;
-	Timeout.QuadPart = -10LL * 1000LL * 1000LL * (LONGLONG)Count;
+	/* 2s en vez de 10s: con INTx viva el evento se senala en ms (PIC
+	 * nunca espera); con INTx muerta cada comando perdido quemaba 10s.
+	 * Verbos reales responden en us-ms; 2s es margen 1000x. */
+	Timeout.QuadPart = -2LL * 1000LL * 1000LL * (LONGLONG)Count;
 	status = KeWaitForSingleObject(&fdoCtx->rirb.xferEvent[codecAddr], Executive, KernelMode, FALSE, &Timeout);
 	KeClearEvent(&fdoCtx->rirb.xferEvent[codecAddr]);
 
