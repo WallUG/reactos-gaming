@@ -641,11 +641,29 @@ IopCheckResourceDescriptor(
                 {
                     if (ResDesc->u.Interrupt.Vector == ResDesc2->u.Interrupt.Vector)
                     {
+                        /* Fase5-SMP: mismo vector+level compartido level+shared
+                         * NO es conflicto (PCI INTx compartido: los internos
+                         * van todos a GSI16). Sin esto se descarta la boot-list
+                         * y el arbitro reasigna (HDA 16->20: escucha un pin
+                         * vacio, RIRB timeouts + storm a1 del trafico PIRQE). */
+                        if (ResDesc->u.Interrupt.Level == ResDesc2->u.Interrupt.Level &&
+                            ResDesc->ShareDisposition == CmResourceShareShared &&
+                            ResDesc2->ShareDisposition == CmResourceShareShared &&
+                            (ResDesc->Flags & CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE) &&
+                            (ResDesc2->Flags & CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE))
+                        {
+                            break;
+                        }
                         if (!Silent)
                         {
-                            DPRINT1("Resource conflict: IRQ (0x%x 0x%x vs. 0x%x 0x%x)\n",
+                            /* TEMP-110: disposiciones para cazar al
+                             * reclamante exclusivo de 16/20 en HW. */
+                            DPRINT1("Resource conflict: IRQ (0x%x 0x%x vs. 0x%x 0x%x) sh %d/%d lv %d/%d\n",
                                     ResDesc->u.Interrupt.Vector, ResDesc->u.Interrupt.Level,
-                                    ResDesc2->u.Interrupt.Vector, ResDesc2->u.Interrupt.Level);
+                                    ResDesc2->u.Interrupt.Vector, ResDesc2->u.Interrupt.Level,
+                                    ResDesc->ShareDisposition, ResDesc2->ShareDisposition,
+                                    !!(ResDesc->Flags & CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE),
+                                    !!(ResDesc2->Flags & CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE));
                         }
 
                         Result = TRUE;
