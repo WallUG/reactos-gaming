@@ -246,38 +246,11 @@ void PerfDataRefresh(void)
     EnterCriticalSection(&PerfDataCriticalSection);
 
     /*
-     * Save system performance info
+     * Per-CPU usage (Fase 5.1 taskmgr): deltas por CPU contra tiempo de
+     * pared. Se calcula AQUI (query fresco aun valido) y no mas abajo:
+     * el buffer de consulta se libera tras el memcpy. Solo si ya hay
+     * muestra previa y hay tiempo transcurrido.
      */
-    memcpy(&SystemPerfInfo, &SysPerfInfo, sizeof(SYSTEM_PERFORMANCE_INFORMATION));
-
-    /*
-     * Save system cache info
-     */
-    memcpy(&SystemCacheInfo, &SysCacheInfo, sizeof(SYSTEM_FILECACHE_INFORMATION));
-
-    /*
-     * Save system processor time info
-     */
-    memcpy(SystemProcessorTimeInfo, SysProcessorTimeInfo,
-           sizeof(*SystemProcessorTimeInfo) * SystemBasicInfo.NumberOfProcessors);
-
-    if (SysProcessorTimeInfo) {
-        HeapFree(GetProcessHeap(), 0, SysProcessorTimeInfo);
-    }
-
-    /*
-     * Save system handle info
-     */
-    SystemNumberOfHandles = SysHandleInfoData.NumberOfHandles;
-
-    for (CurrentKernelTime=0, Idx=0; Idx<(ULONG)SystemBasicInfo.NumberOfProcessors; Idx++) {
-        CurrentKernelTime += Li2Double(SystemProcessorTimeInfo[Idx].KernelTime);
-        CurrentKernelTime += Li2Double(SystemProcessorTimeInfo[Idx].DpcTime);
-        CurrentKernelTime += Li2Double(SystemProcessorTimeInfo[Idx].InterruptTime);
-    }
-
-    /* Per-CPU usage (Fase 5.1 taskmgr): deltas por CPU contra tiempo de
-     * pared. Solo si ya hay muestra previa y hay tiempo transcurrido. */
     if (liOldIdleTime.QuadPart != 0) {
         double sysDelta = Li2Double(SysTimeInfo.CurrentTime) - Li2Double(liOldSystemTime);
         if (sysDelta > 0) {
@@ -314,6 +287,37 @@ void PerfDataRefresh(void)
                                          + SysProcessorTimeInfo[Idx].DpcTime.QuadPart
                                          + SysProcessorTimeInfo[Idx].InterruptTime.QuadPart;
         }
+    }
+
+    /*
+     * Save system performance info
+     */
+    memcpy(&SystemPerfInfo, &SysPerfInfo, sizeof(SYSTEM_PERFORMANCE_INFORMATION));
+
+    /*
+     * Save system cache info
+     */
+    memcpy(&SystemCacheInfo, &SysCacheInfo, sizeof(SYSTEM_FILECACHE_INFORMATION));
+
+    /*
+     * Save system processor time info
+     */
+    memcpy(SystemProcessorTimeInfo, SysProcessorTimeInfo,
+           sizeof(*SystemProcessorTimeInfo) * SystemBasicInfo.NumberOfProcessors);
+
+    if (SysProcessorTimeInfo) {
+        HeapFree(GetProcessHeap(), 0, SysProcessorTimeInfo);
+    }
+
+    /*
+     * Save system handle info
+     */
+    SystemNumberOfHandles = SysHandleInfoData.NumberOfHandles;
+
+    for (CurrentKernelTime=0, Idx=0; Idx<(ULONG)SystemBasicInfo.NumberOfProcessors; Idx++) {
+        CurrentKernelTime += Li2Double(SystemProcessorTimeInfo[Idx].KernelTime);
+        CurrentKernelTime += Li2Double(SystemProcessorTimeInfo[Idx].DpcTime);
+        CurrentKernelTime += Li2Double(SystemProcessorTimeInfo[Idx].InterruptTime);
     }
 
     /* If it's a first call - skip idle time calcs */
