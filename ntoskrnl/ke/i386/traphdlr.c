@@ -1290,21 +1290,26 @@ KiCheckForSListFault(PKTRAP_FRAME TrapFrame)
 
         /* Sanity check that the assembly is correct:
            This must be mov ebx, [eax]
-           Followed by LOCK cmpxchg8b [ebp] (the LOCK prefix F0 is
-           part of the pattern: without it the check below misfires
-           on every S-List race -- caught on 4-CPU HW where lookaside
-           races are constant and boot wedged here in KDB).
+           Followed by [LOCK] cmpxchg8b [ebp]. The MP build carries the
+           LOCK prefix (F0); the UP build compiles it out (UP needs no
+           lock: IRQL masking makes the sequence atomic). Accept both:
+           demanding F0 unconditionally murders UP boots on a legitimate
+           race. Register roles are identical either way, so the resume
+           below is safe for both encodings.
            A wild EIP (low addresses) never matches valid stubs. */
         if (TrapFrame->Eip < 0x10000)
             return FALSE;
-        if ((((UCHAR*)TrapFrame->Eip)[0] != 0x8B) ||
-            (((UCHAR*)TrapFrame->Eip)[1] != 0x18) ||
-            (((UCHAR*)TrapFrame->Eip)[2] != 0xF0) ||
-            (((UCHAR*)TrapFrame->Eip)[3] != 0x0F) ||
-            (((UCHAR*)TrapFrame->Eip)[4] != 0xC7) ||
-            (((UCHAR*)TrapFrame->Eip)[5] != 0x4D) ||
-            (((UCHAR*)TrapFrame->Eip)[6] != 0x00))
         {
+            PUCHAR _b = (PUCHAR)TrapFrame->Eip;
+            BOOLEAN _mp = (_b[0] == 0x8B) && (_b[1] == 0x18) &&
+                          (_b[2] == 0xF0) && (_b[3] == 0x0F) &&
+                          (_b[4] == 0xC7) && (_b[5] == 0x4D) &&
+                          (_b[6] == 0x00);
+            BOOLEAN _up = (_b[0] == 0x8B) && (_b[1] == 0x18) &&
+                          (_b[2] == 0x0F) && (_b[3] == 0xC7) &&
+                          (_b[4] == 0x4D) && (_b[5] == 0x00);
+            if (!_mp && !_up)
+            {
             /* EIP matched a fault label but the bytes differ
              * (runtime-patched code or a chance collision): diagnose
              * once and let normal fault dispatch handle it instead of
@@ -1312,13 +1317,13 @@ KiCheckForSListFault(PKTRAP_FRAME TrapFrame)
             static ULONG _slistMismatch = 0;
             if (_slistMismatch++ == 0)
             {
-                PUCHAR _b = (PUCHAR)TrapFrame->Eip;
                 DbgPrint("SLISTMISMATCH eip %08X bytes %02X %02X %02X %02X %02X %02X %02X %02X ebp %08X eax %08X\n",
                          (unsigned)TrapFrame->Eip,
                          _b[0], _b[1], _b[2], _b[3], _b[4], _b[5], _b[6], _b[7],
                          (unsigned)TrapFrame->Ebp, (unsigned)TrapFrame->Eax);
             }
             return FALSE;
+            }
         }
 
         /* Check if this is a user fault */
