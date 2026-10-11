@@ -388,6 +388,18 @@ hda_interrupt(
 	if (!fdoCtx->ControllerEnabled)
 		return handled;
 
+	/* Fase5-SMP: drenar STATESTS (cambio de estado por wake). El BIOS deja
+	 * WAKEEN activo; tras el primer wake el bit queda asertando INTx y nadie
+	 * lo limpia (storm identico en PIC y APIC). W1C antes del chequeo INTSTS
+	 * porque STATESTS aserta aunque INTSTS este a 0. */
+	{
+		UINT16 ssts = hda_read16(fdoCtx, STATESTS);
+		if (ssts & STATESTS_INT_MASK) {
+			hda_write16(fdoCtx, STATESTS, ssts & STATESTS_INT_MASK);
+			handled = TRUE;
+		}
+	}
+
 	UINT32 status = hda_read32(fdoCtx, INTSTS);
 	if (status == 0 || status == 0xffffffff)
 		return handled;
