@@ -81,25 +81,20 @@ PciPirqToGsi(
             (RcbaRaw & 0xFFFFC000) != 0 &&
             (RcbaRaw & 0xFFFFC000) != 0xFFFFC000)
         {
-            PhysAddr.QuadPart = (ULONGLONG)(RcbaRaw & 0xFFFFC000);
+            /* Mapea el bloque DxxIR (RCBA+0x3140, 9 dwords). */
+            PhysAddr.QuadPart = (ULONGLONG)((RcbaRaw & 0xFFFFC000) + 0x3140);
             DxxIrBase = MmMapIoSpace(PhysAddr, 0x40, MmNonCached);
             if (DxxIrBase != NULL) Usable = TRUE;
         }
         DbgPrint("PIRPROBE rcba %08x usable %d\n", RcbaRaw, Usable);
-        /* TEMP-107: dump crudo DxxIR para validar offsets en silicio. */
-        if (Usable)
-        {
-            DbgPrint("PIRDUMP %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
-                     DxxIrBase[0], DxxIrBase[1], DxxIrBase[2],
-                     DxxIrBase[3], DxxIrBase[4], DxxIrBase[5],
-                     DxxIrBase[6], DxxIrBase[7], DxxIrBase[8]);
-        }
     }
     if (!Usable) return FALSE;
 
     DxxIr = DxxIrBase[Idx];
-    if (DxxIr & 0xF8F8F8F8) return FALSE; /* letras 0-7 o nada */
-    Letter = (UCHAR)((DxxIr >> ((InterruptPin - 1) * 8)) & 0x7);
+    /* DxxIR empaqueta un nibble por INTx (INTA=nibble0 ... INTD=nibble3,
+     * letra 0-7; validado en Q35: 0x00003210 = A,B,C,D). */
+    if (DxxIr & 0x88888888) return FALSE; /* reservados o basura */
+    Letter = (UCHAR)((DxxIr >> ((InterruptPin - 1) * 4)) & 0x7);
     *Gsi = 16 + Letter;
     DbgPrint("PIRPROG bus 0 dev %lu pin %d -> PIRQ%c -> GSI %lu\n",
              DeviceNumber, InterruptPin, 'A' + Letter, *Gsi);
