@@ -288,6 +288,13 @@ HalDisableSystemInterrupt(
 );
 
 NTHALAPI
+VOID
+NTAPI
+HalStormMaskVector(
+    _In_ ULONG Vector
+);
+
+NTHALAPI
 BOOLEAN
 NTAPI
 HalEnableSystemInterrupt(

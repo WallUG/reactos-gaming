@@ -34,6 +34,7 @@
 @ stdcall HalInitializeProcessor(long ptr)
 ;@ stdcall -arch=x86_64 HalIsHyperThreadingEnabled()
 @ stdcall HalIsApicMode()
+@ stdcall HalStormMaskVector(long)
 @ stdcall HalMakeBeep(long)
 @ stdcall HalProcessorIdle()
 @ stdcall HalQueryDisplayParameters(ptr ptr ptr ptr)

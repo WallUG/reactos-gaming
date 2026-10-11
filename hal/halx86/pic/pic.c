@@ -287,6 +287,9 @@ HalpIrqToVector(UCHAR Irq)
     return (PRIMARY_VECTOR_BASE + Irq);
 }
 
+/* Fase5-SMP: vectores enmascarados por storm (ver apic.c). */
+static UCHAR HalpStormHeld[256] = {0};
+
 UCHAR
 FASTCALL
 HalpVectorToIrq(UCHAR Vector)
@@ -956,6 +959,9 @@ HalEnableSystemInterrupt(IN ULONG Vector,
     Irq = Vector - PRIMARY_VECTOR_BASE;
     if (Irq >= CLOCK2_LEVEL) return FALSE;
 
+    /* Storm-held: no desmascarar (el guard lo retuvo). */
+    if (HalpStormHeld[Vector & 0xFF]) return FALSE;
+
     /* Check for level interrupt */
     if (InterruptMode == LevelSensitive)
     {
@@ -1017,6 +1023,26 @@ HalDisableSystemInterrupt(IN ULONG Vector,
     _enable();
 }
 
+VOID
+NTAPI
+HalStormMaskVector(
+    IN ULONG Vector)
+{
+    ULONG IrqMask;
+    PIC_MASK PicMask;
+    if (Vector >= 256) return;
+    IrqMask = 1 << (Vector - PRIMARY_VECTOR_BASE);
+    _disable();
+    KeGetPcr()->IDR |= IrqMask;
+    PicMask.Master = __inbyte(PIC1_DATA_PORT);
+    PicMask.Slave = __inbyte(PIC2_DATA_PORT);
+    PicMask.Both |= IrqMask;
+    __outbyte(PIC1_DATA_PORT, PicMask.Master);
+    __outbyte(PIC2_DATA_PORT, PicMask.Slave);
+    _enable();
+    HalpStormHeld[Vector & 0xFF] = 1;
+}
+
 /* Fase5-SMP: FALSE en los HAL PIC (8259: solo IRQ 0-15). */
 BOOLEAN
 NTAPI
@@ -1036,7 +1062,8 @@ HalRearmSystemInterrupt(IN ULONG Vector)
     PIC_MASK PicMask;
 
     /* Clear ONLY the mask bit (no reprogram). Self-healing for the
-     * kernel storm guard on driver connect. */
+     * kernel storm guard on driver connect. Storm-held: no resucitar. */
+    if (HalpStormHeld[Vector & 0xFF]) return;
     IrqMask = 1 << (Vector - PRIMARY_VECTOR_BASE);
 
     /* Disable interrupts */

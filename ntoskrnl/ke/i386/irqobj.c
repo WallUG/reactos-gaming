@@ -353,13 +353,10 @@ KiIsrStormCheck(IN UCHAR Vector)
     Count = InterlockedIncrement((PLONG)&KiIsrStormCount[Vector]);
     if (Count == ISR_STORM_THRESHOLD)
     {
-        /* Storm confirmed: mask (only mechanism that drops the
-         * delivery rate to zero; skip alone leaves 474K traps/sec
-         * starving workers AND DPCs) + skip ISR + report once EVER.
-         * Self-healing via HalRearmSystemInterrupt on every later
-         * connect (KeConnectInterrupt) so legit traffic resumes;
-         * the asserter's own reset (once its worker runs) ends it. */
-        HalDisableSystemInterrupt(Vector, 0);
+        /* Storm confirmed: storm-held mask via HAL (rearm/enable no lo
+         * deshacen; una alocacion fresca lo levanta) + skip ISR + report
+         * once EVER. */
+        HalStormMaskVector(Vector);
         if (InterlockedExchange(&KiIsrStormReported[Vector], 1) == 0)
         {
             DbgPrint("ISRSTORM vector %02x storming (skip, no mask)\n",
@@ -394,6 +391,20 @@ KiIsrStormCheck(IN UCHAR Vector)
                          (void *)KiVecInstallObj[Vector],
                          (void *)KiVecInstallRet[Vector],
                          (unsigned long)KiVecInstallTick[Vector]);
+                /* TEMP-114: totales por vector al confirmar storm (quien
+                 * mas dispara ademas del stormer). */
+                {
+                    ULONG _v;
+                    for (_v = 0; _v < 256; _v++)
+                    {
+                        if (KiIsrTotalCount[_v] > 20)
+                        {
+                            DbgPrint("ISRVEC vector %02x total %lu\n",
+                                     (unsigned)_v,
+                                     (unsigned long)KiIsrTotalCount[_v]);
+                        }
+                    }
+                }
             }
         }
         else if ((Tick - (ULONG)KiIsrStormHeartbeat[Vector]) >= 500)

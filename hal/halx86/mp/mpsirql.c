@@ -316,6 +316,25 @@ HalIsApicMode(VOID)
   return TRUE;
 }
 
+/* Fase5-SMP: storm-held (ver apic.c). */
+static UCHAR HalpStormHeld[256] = {0};
+
+VOID
+NTAPI
+HalStormMaskVector(ULONG Vector)
+{
+  ULONG irq;
+  if (Vector >= 256) return;
+  if (Vector < FIRST_DEVICE_VECTOR ||
+      Vector >= FIRST_DEVICE_VECTOR + NUMBER_DEVICE_VECTORS)
+  {
+    return;
+  }
+  irq = VECTOR2IRQ (Vector);
+  IOAPICMaskIrq (irq);
+  HalpStormHeld[Vector & 0xFF] = 1;
+}
+
 VOID
 NTAPI
 HalRearmSystemInterrupt(ULONG Vector)
@@ -323,7 +342,8 @@ HalRearmSystemInterrupt(ULONG Vector)
   ULONG irq;
 
   /* Clear ONLY the mask bit (no reprogram). Self-healing for the
-   * kernel storm guard on driver connect. */
+   * kernel storm guard on driver connect. Storm-held: no resucitar. */
+  if ((Vector < 256) && HalpStormHeld[Vector & 0xFF]) return;
   if (Vector < FIRST_DEVICE_VECTOR ||
       Vector >= FIRST_DEVICE_VECTOR + NUMBER_DEVICE_VECTORS)
   {
@@ -352,6 +372,9 @@ HalEnableSystemInterrupt (ULONG Vector,
   }
 
   /* FIXME: We must check if the requested and the assigned interrupt mode is the same */
+
+  /* Storm-held: no desmascarar (el guard lo retuvo). */
+  if (HalpStormHeld[Vector & 0xFF]) return FALSE;
 
   irq = VECTOR2IRQ (Vector);
   IOAPICUnmaskIrq (irq);

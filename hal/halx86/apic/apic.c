@@ -29,6 +29,10 @@ ULONG ApicVersion;
 UCHAR HalpVectorToIndex[256];
 extern PPROCESSOR_IDENTITY HalpProcessorIdentity;
 
+/* Fase5-SMP: vectores enmascarados por storm (guard del kernel). Ni el
+ * rearm ni el enable los desmascaran; solo una alocacion fresca limpia. */
+UCHAR HalpStormHeld[256] = {0};
+
 /* MADT override tables (strong definitions in madt.c when the ACPI
  * component links; weak identity defaults here so HALs without ACPI
  * still link and behave as before: identity routing, driver Mode). */
@@ -469,6 +473,9 @@ HalpAllocateSystemInterrupt(
     /* Initialize entry */
     ApicWriteIORedirectionEntry(Irq, ReDirReg);
 
+    /* Fresh allocation: levanta storm-held previo (nuevo dueño). */
+    HalpStormHeld[Vector & 0xFF] = 0;
+
     /* Save irq in the table */
     HalpVectorToIndex[Vector] = Irq;
 
@@ -536,6 +543,16 @@ HalpGetRootInterruptVector(
 
 Exit:
 
+    /* TEMP-114: mapa irq->vec por connect (cazar pin de a1). */
+    ;
+    {
+        static UCHAR _ivSeen[256] = {0};
+        if (Vector != 0 && !_ivSeen[Vector & 0xFF])
+        {
+            _ivSeen[Vector & 0xFF] = 1;
+            DbgPrint("IRQVEC irq %lu -> vec %02x\n", BusInterruptLevel, Vector);
+        }
+    }
     *OutAffinity = HalpDefaultInterruptAffinity;
     ASSERT(HalpDefaultInterruptAffinity);
 
@@ -843,7 +860,9 @@ HalEnableSystemInterrupt(
     }
 
     /* Set up the redirection entry: Fixed/Physical, routed across
-     * CPUs (10/11/14/15 stay on the BSP, see helper). */
+     * CPUs (10/11/14/15 stay on the BSP, see helper).
+     * Storm-held: no desmascarar (el guard lo retuvo). */
+    if (HalpStormHeld[Vector & 0xFF]) return FALSE;
     ReDirReg.Vector = Vector;
     ReDirReg.MessageType = APIC_MT_Fixed;
     ReDirReg.DestinationMode = APIC_DM_Physical;
@@ -937,6 +956,22 @@ HalDisableSystemInterrupt(
     IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
 }
 
+VOID
+NTAPI
+HalStormMaskVector(
+    IN ULONG Vector)
+{
+    IOAPIC_REDIRECTION_REGISTER ReDirReg;
+    UCHAR Index;
+    if (Vector >= RTL_NUMBER_OF(HalpVectorToIndex)) return;
+    Index = HalpVectorToIndex[Vector];
+    if (Index >= APIC_MAX_IRQ) return;
+    ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);
+    ReDirReg.Mask = 1;
+    IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
+    HalpStormHeld[Vector & 0xFF] = 1;
+}
+
 /* Fase5-SMP: TRUE en los HAL APIC (este), FALSE en los PIC. Lo usa
  * pci.sys para reportar GSI 16+letra solo donde hay IOAPIC. */
 BOOLEAN
@@ -955,9 +990,10 @@ HalRearmSystemInterrupt(
      * kernel storm guard: unmask on driver connect (chained connects
      * never call HalEnableSystemInterrupt, so a guard mask would
      * otherwise deafen the line forever). No-op if already unmasked
-     * or vector unmapped. */
+     * or vector unmapped. Storm-held: no resucitar. */
     IOAPIC_REDIRECTION_REGISTER ReDirReg;
     UCHAR Index;
+    if (HalpStormHeld[Vector & 0xFF]) return;
     if (Vector >= RTL_NUMBER_OF(HalpVectorToIndex)) return;
     Index = HalpVectorToIndex[Vector];
     if (Index >= APIC_MAX_IRQ) return;
