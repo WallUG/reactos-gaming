@@ -956,13 +956,6 @@ USBPORT_IsrDpcHandler(IN PDEVICE_OBJECT FdoDevice,
 
     if (InterlockedIncrement(&FdoExtension->IsrDpcHandlerCounter))
     {
-        /* DIAG (first 3 bounces): a stuck counter bounces every call
-         * forever (submit ok, collect dead). */
-        {
-            static volatile LONG _bnc = 0;
-            if (InterlockedIncrement(&_bnc) <= 3)
-                DbgPrint("USBPBOUNCE fdo %p\n", FdoDevice);
-        }
         KeInsertQueueDpc(&FdoExtension->IsrDpc, NULL, NULL);
         InterlockedDecrement(&FdoExtension->IsrDpcHandlerCounter);
         return;
@@ -1135,15 +1128,6 @@ USBPORT_InterruptService(IN PKINTERRUPT Interrupt,
     if (FdoExtension->Flags & USBPORT_FLAG_INTERRUPT_ENABLED &&
         FdoExtension->MiniPortFlags & USBPORT_MPFLAG_INTERRUPTS_ENABLED)
     {
-        /* TEMP-DIAG 085-wedge hunt (3-way verdict, revert after):
-         * first real ISR entries per boot. USBALIVE running + no
-         * USBFIRE = HC never asserts; USBALIVE stopped = high-IRQL
-         * wedge; USBFIRE without progress = completion path stuck. */
-        {
-            static volatile LONG _fire = 0;
-            if (InterlockedIncrement(&_fire) <= 4)
-                DbgPrint("USBFIRE fdo %p #%ld\n", FdoDevice, (long)_fire);
-        }
         Result = Packet->InterruptService(FdoExtension->MiniPortExt);
 
         if (Result)
@@ -1647,16 +1631,6 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
 
     if (TimerFlags & USBPORT_TMFLAG_HC_SUSPENDED)
     {
-        /* DIAG (first 3 hits): a suspended controller exits WITHOUT
-         * IsrDpcHandler, so completions are never collected. */
-        {
-            static volatile LONG _susp = 0;
-            if (InterlockedIncrement(&_susp) <= 3)
-                DbgPrint("USBPSUSP fdo %p flags %08X tmflags %08X\n",
-                         FdoDevice,
-                         (unsigned)FdoExtension->Flags,
-                         (unsigned)TimerFlags);
-        }
         USBPORT_BadRequestFlush(FdoDevice);
         goto Exit;
     }
@@ -1728,18 +1702,6 @@ Exit:
                    &FdoExtension->TimerDpc);
     }
 
-    /* TEMP-DIAG 085-wedge hunt (revert after): ~10s heartbeat proves
-     * the poll timer still runs (CPU not wedged at high IRQL). */
-    {
-        static volatile LONG _aliveTv = 0;
-        LONG _nowA = (LONG)KeTickCount.LowPart;
-        if (_nowA - _aliveTv >= 1000)
-        {
-            _aliveTv = _nowA;
-            DbgPrint("USBALIVE tick %ld\n", (long)_nowA);
-        }
-    }
-
     /* SMP/APIC bring-up vs real HW: self-healing for storm-masked
      * lines. Re-arme por-vector por-tiempo (cada uno a ~500ms como
      * mucho): sin contadores globales (una puerta %N compartida entre
@@ -1786,8 +1748,6 @@ USBPORT_StartTimer(IN PDEVICE_OBJECT FdoDevice,
     /* DIAG (once per controller): proves each controller's poll timer
      * actually started (a dead 2nd-controller timer = no poll, no
      * rearm, wedge at first transfer). */
-    DbgPrint("USBPTIMER start fdo %p ms %lu\n", FdoDevice, (unsigned long)Time);
-
     KeInitializeTimer(&FdoExtension->TimerObject);
     KeInitializeDpc(&FdoExtension->TimerDpc, USBPORT_TimerDpc, FdoDevice);
 

@@ -125,12 +125,6 @@ USBSTOR_IssueRequestSense(
 IO_COMPLETION_ROUTINE USBSTOR_CSWCompletionRoutine;
 IO_COMPLETION_ROUTINE USBSTOR_DataCompletionRoutine;
 
-/* TEMP-DIAG BOTPH (revert): latencia por fase en un comando BOT
- * (CBWsub, CBWdone, DATAsub, DATA done, CSWsub, CSWdone). Primeros 8.
- * Dice que eslabon come los ~30ms fijos por comando. */
-static volatile LONG BotPhSlot = 0;
-static LARGE_INTEGER BotPhT[6];
-
 /* Fase5-SMP pacing: la fase DATA salia en el mismo completion del CBW
  * (microsegundos despues); el stick STALLaba por no-estar-listo y cada
  * comando pagaba 1-2 resets (~600ms). PIC, paceado por IRQ (~ms), va
@@ -160,9 +154,6 @@ USBSTOR_DataPhaseWorkItemRoutine(
                                     * con ~1ms; margen 3x, latencia minima) */
     KeDelayExecutionThread(KernelMode, FALSE, &DueTime);
 
-    /* TEMP-DIAG BOTPH [2] */
-    if (BotPhSlot < 8) KeQueryTickCount(&BotPhT[2]);
-
     USBSTOR_IssueBulkOrInterruptRequest(Ctx->FdoExtension,
                                         Ctx->Irp,
                                         Ctx->PipeHandle,
@@ -189,19 +180,6 @@ USBSTOR_CSWCompletionRoutine(
     PSCSI_REQUEST_BLOCK Request;
 
     DPRINT("USBSTOR_CSWCompletionRoutine Irp %p Ctx %p Status %x\n", Irp, Ctx, Irp->IoStatus.Status);
-
-    /* TEMP-DIAG BOTPH [5] + linea (primeros 8 comandos) */
-    if (BotPhSlot < 8)
-    {
-        KeQueryTickCount(&BotPhT[5]);
-        DbgPrint("BOTPH d01 %ld d12 %ld d23 %ld d34 %ld d45 %ld ms\n",
-                 (long)(BotPhT[1].QuadPart - BotPhT[0].QuadPart),
-                 (long)(BotPhT[2].QuadPart - BotPhT[1].QuadPart),
-                 (long)(BotPhT[3].QuadPart - BotPhT[2].QuadPart),
-                 (long)(BotPhT[4].QuadPart - BotPhT[3].QuadPart),
-                 (long)(BotPhT[5].QuadPart - BotPhT[4].QuadPart));
-        BotPhSlot++;
-    }
 
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     PDODeviceExtension = (PPDO_DEVICE_EXTENSION)IoStack->DeviceObject->DeviceExtension;
@@ -307,9 +285,6 @@ USBSTOR_SendCSWRequest(
     PFDO_DEVICE_EXTENSION FDODeviceExtension,
     PIRP Irp)
 {
-    /* TEMP-DIAG BOTPH [4] */
-    if (BotPhSlot < 8) KeQueryTickCount(&BotPhT[4]);
-
     return USBSTOR_IssueBulkOrInterruptRequest(FDODeviceExtension,
                                                Irp,
                                                FDODeviceExtension->InterfaceInformation->Pipes[FDODeviceExtension->BulkInPipeIndex].PipeHandle,
@@ -336,9 +311,6 @@ USBSTOR_DataCompletionRoutine(
     PPDO_DEVICE_EXTENSION PDODeviceExtension;
 
     DPRINT("USBSTOR_DataCompletionRoutine Irp %p Ctx %p Status %x\n", Irp, Ctx, Irp->IoStatus.Status);
-
-    /* TEMP-DIAG BOTPH [3] */
-    if (BotPhSlot < 8) KeQueryTickCount(&BotPhT[3]);
 
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)Ctx;
     Context = &FDODeviceExtension->CurrentIrpContext;
@@ -411,9 +383,6 @@ USBSTOR_CBWCompletionRoutine(
     PVOID TransferBuffer = NULL;
 
     DPRINT("USBSTOR_CBWCompletionRoutine Irp %p Ctx %p Status %x\n", Irp, Ctx, Irp->IoStatus.Status);
-
-    /* TEMP-DIAG BOTPH [1] */
-    if (BotPhSlot < 8) KeQueryTickCount(&BotPhT[1]);
 
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)Ctx;
     IoStack = IoGetCurrentIrpStackLocation(Irp);
@@ -567,11 +536,6 @@ USBSTOR_SendCBWRequest(
     Request = IoStack->Parameters.Scsi.Srb;
 
     // Make a CBW structure from SCSI request block
-    /* TEMP-DIAG BOTPH [0] (+freq una vez) */
-    if (BotPhSlot < 8)
-    {
-        KeQueryTickCount(&BotPhT[0]);
-    }
     Context->cbw.Signature = CBW_SIGNATURE;
     Context->cbw.Tag = PtrToUlong(Irp);
     Context->cbw.DataTransferLength = Request->DataTransferLength;

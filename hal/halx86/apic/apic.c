@@ -896,19 +896,6 @@ HalEnableSystemInterrupt(
     /* Write back the entry (unmasked) */
     ApicWriteIORedirectionEntry(Index, ReDirReg);
 
-    /* TEMP-DEBUG IRQ routing hunt: dump every programmed RTE (compare
-     * with board MADT on real HW; wrong trigger/dest/mask hangs device
-     * completion waits). Revert after test. */
-    {
-        IOAPIC_REDIRECTION_REGISTER _rd;
-        _rd = ApicReadIORedirectionEntry(Index);
-        DbgPrint("RTEDBG idx %02u vec %02x trig %s pol %s dst %02x mask %u\n",
-                 (unsigned)Index, (unsigned)Vector,
-                 _rd.TriggerMode ? "level" : "edge",
-                 _rd.Polarity ? "low" : "high",
-                 (unsigned)_rd.Destination, (unsigned)_rd.Mask);
-    }
-
     return TRUE;
 }
 
@@ -952,23 +939,6 @@ HalRearmSystemInterrupt(
     Index = HalpVectorToIndex[Vector];
     if (Index >= APIC_MAX_IRQ) return;
     ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);
-    /* TEMP-DIAG mask-vs-wire (revert): live RTE state every ~10s per
-     * index. If livemask=1 algo re-enmascara por detras (SMM?); si 0
-     * con INT pendiente y sin ISR, el cable no afirma (wire/router). */
-    {
-        static volatile LONG _rteN[APIC_MAX_IRQ] = {0};
-        /* Rearm corre ~2x/s por vector: imprime 1 de cada 20 (~10s). */
-        if ((InterlockedIncrement(&_rteN[Index]) % 20) == 1)
-        {
-            DbgPrint("RTELIVE idx %u mask %lu pol %s trig %s vec %02lx irr %lu\n",
-                     (unsigned)Index,
-                     (unsigned long)ReDirReg.Mask,
-                     ReDirReg.Polarity ? "low" : "high",
-                     ReDirReg.TriggerMode ? "level" : "edge",
-                     (unsigned long)ReDirReg.Vector,
-                     (unsigned long)ReDirReg.RemoteIRR);
-        }
-    }
     if (ReDirReg.Mask == 0) return;
     ReDirReg.Mask = 0;
     IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);

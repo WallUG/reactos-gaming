@@ -1141,12 +1141,6 @@ EHCI_TakeControlHC(IN PEHCI_EXTENSION EhciExtension)
     KeQuerySystemTime(&EndTime);
     EndTime.QuadPart += 100 * 10000;
 
-    /* TEMP-DIAG USB-vs-HW hunt (keep the DPRINT1s until HW validates). */
-    DPRINT1("EHCI_TakeControlHC: EECP %02X BiosOwned %u OsOwned %u\n",
-            (unsigned)OffsetEECP,
-            (unsigned)LegacyCapability.BiosOwnedSemaphore,
-            (unsigned)LegacyCapability.OsOwnedSemaphore);
-
     do
     {
         RegPacket.UsbPortReadWriteConfigSpace(EhciExtension,
@@ -1163,7 +1157,6 @@ EHCI_TakeControlHC(IN PEHCI_EXTENSION EhciExtension)
          * completes for the OS). */
         if (LegacyCapability.BiosOwnedSemaphore == 0)
         {
-            DPRINT1("EHCI_TakeControlHC: ownership acquired\n");
             break;
         }
     }
@@ -1502,14 +1495,6 @@ EHCI_HardwarePresent(IN PEHCI_EXTENSION EhciExtension,
     return FALSE;
 }
 
-/* TEMP-DIAG USB-vs-HW hunt: ISR heartbeat counters (see
- * EHCI_InterruptService). Revert after test. */
-static volatile ULONG EhciIsrEntries = 0;
-/* Telemetria bulk de toda la sesion (el cap de 60 oculta la fase tardia). */
-static volatile LONG UsbBulkSubmits = 0;
-static volatile LONG UsbBulkHalts = 0;
-static volatile ULONG EhciIsrAcks = 0;
-
 BOOLEAN
 NTAPI
 EHCI_InterruptService(IN PVOID ehciExtension)
@@ -1534,22 +1519,6 @@ EHCI_InterruptService(IN PVOID ehciExtension)
 
     IntrEn.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG);
     IntrSts.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
-
-    /* TEMP-DIAG USB-vs-HW hunt: heartbeat (entries/acks/last status
-     * every 1M entries; quiet when idle, ~1/2s in storms). Tells
-     * whether the HC asserts anything post-pipe-5 and whether the
-     * ISR acks it. Revert after test. */
-    {
-        ULONG _n = InterlockedIncrement((PLONG)&EhciIsrEntries);
-        if ((_n % 1000000) == 0)
-        {
-            if (0) DbgPrint("EHCIHB isr %lu true %lu en %08X sts %08X\n",
-                     (unsigned long)_n,
-                     (unsigned long)EhciIsrAcks,
-                     (unsigned)IntrEn.AsULONG,
-                     (unsigned)IntrSts.AsULONG);
-        }
-    }
 
     iStatus.AsULONG = (IntrEn.AsULONG & IntrSts.AsULONG) & EHCI_INTERRUPT_MASK;
 
@@ -1584,9 +1553,6 @@ EHCI_InterruptService(IN PVOID ehciExtension)
     }
 
     EhciExtension->FrameIndex = FrameIndex;
-
-    /* TEMP-DIAG (see heartbeat above). */
-    InterlockedIncrement((PLONG)&EhciIsrAcks);
 
     return TRUE;
 }
@@ -2414,26 +2380,6 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
     TD->HwTD.NextTD = EhciEndpoint->HcdTailP->PhysicalAddress;
     TD->NextHcdTD = EhciEndpoint->HcdTailP;
 
-    /* FORENSE bulk-halt (primeros 60 submits; revert). tick = submit. */
-    if (EhciEndpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK)
-    {
-        static volatile LONG _bsub = 0;
-        LONG _tot = InterlockedIncrement(&UsbBulkSubmits);
-        if (InterlockedIncrement(&_bsub) <= 60)
-        {
-            LARGE_INTEGER _t;
-            KeQueryTickCount(&_t);
-            DbgPrint("BULKSUB eps %p ep %02X len %lu firstDT %u tick %lu\n",
-                     EhciTransfer,
-                     (unsigned)EhciEndpoint->EndpointProperties.EndpointAddress,
-                     (unsigned long)TransferParameters->TransferBufferLength,
-                     (unsigned)FirstTD->HwTD.Token.DataToggle,
-                     (unsigned long)_t.LowPart);
-        }
-        if ((_tot % 512) == 0)
-            DbgPrint("BULKSTAT submits %ld halts %ld\n", (long)_tot, (long)UsbBulkHalts);
-    }
-
     EHCI_EnableAsyncList(EhciExtension);
     EHCI_LinkTransferToQueue(EhciExtension, EhciEndpoint, FirstTD);
 
@@ -3118,27 +3064,6 @@ EHCI_GetErrorFromTD(IN PEHCI_HCD_TD TD)
 
     Token = TD->HwTD.Token;
 
-    /* FORENSE bulk-halt (primeros 60 halts; revert). tick = collect.
-     * submit-tick vs halt-tick dice cable (us) vs inanición (s). */
-    {
-        static volatile LONG _bhlt = 0;
-        InterlockedIncrement(&UsbBulkHalts);
-        if (InterlockedIncrement(&_bhlt) <= 60)
-        {
-            LARGE_INTEGER _t;
-            KeQueryTickCount(&_t);
-            DbgPrint("BULKHLT ept %p raw %08X dt %u pid %u cerr %u bytes %u active %u tick %lu\n",
-                     TD->EhciTransfer,
-                     Token.AsULONG,
-                     (unsigned)Token.DataToggle,
-                     (unsigned)Token.PIDCode,
-                     (unsigned)Token.ErrorCounter,
-                     (unsigned)Token.TransferBytes,
-                     (unsigned)((Token.Status & EHCI_TOKEN_STATUS_ACTIVE) != 0),
-                     (unsigned long)_t.LowPart);
-        }
-    }
-
     if (Token.Status & EHCI_TOKEN_STATUS_TRANSACTION_ERROR)
     {
         DPRINT("EHCI_GetErrorFromTD: TD - %p, TRANSACTION_ERROR\n", TD);
@@ -3564,44 +3489,13 @@ EHCI_CheckController(IN PVOID ehciExtension)
 
     //DPRINT_EHCI("EHCI_CheckController: ... \n");
 
-    /* TEMP-DIAG 086-wedge hunt: HC state dump every ~10s (called from
-     * usbport's 50ms timer DPC, runs even with zero interrupts).
-     * The 086 log proved: poll runs forever, ISR never fires, first HS
-     * transfer never completes. This tells whether the HC is halted /
-     * stopped / async-off / doorbell-stuck / schedule-empty / port
-     * wedged. Revert after test. */
-    {
-        static volatile ULONG _chkN = 0;
-        ULONG _n = InterlockedIncrement((PLONG)&_chkN);
-        if ((_n % 5000) == 0)
-        {
-            ULONG _cmd = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcCommand.AsULONG);
-            ULONG _sts = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcStatus.AsULONG);
-            ULONG _fri = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->FrameIndex);
-            ULONG _ien = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->HcInterruptEnable.AsULONG);
-            ULONG _asy = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->AsyncListBase);
-            ULONG _p0 = READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->PortControl[0].AsULONG);
-            DbgPrint("EHCIST hc %p RS=%lu ASE=%lu PSE=%lu IAA=%lu HALT=%lu INT=%lu ERR=%lu AA=%lu PCHG=%lu AS=%lu PS=%lu ien %08lX asy %08lX fr %05lX p0 %08lX n %lu\n",
-                     EhciExtension,
-                     (_cmd >> 0) & 1, (_cmd >> 5) & 1, (_cmd >> 4) & 1, (_cmd >> 6) & 1,
-                     (_sts >> 12) & 1, (_sts >> 0) & 1, (_sts >> 1) & 1, (_sts >> 5) & 1,
-                     (_sts >> 2) & 1, (_sts >> 15) & 1, (_sts >> 14) & 1,
-                     _ien, _asy, _fri & 0x3FFF, _p0, (unsigned long)_n);
-        }
-    }
-
     if (EhciExtension->IsStarted)
         EHCI_HardwarePresent(EhciExtension, TRUE);
 
-    /* 088 FIX (poll-seeded completion): if the HC holds pending+enabled
-     * status that no ISR collected (dead/masked INTx path under APIC on
-     * some boards: INT stuck=1, ISR never fires, first transfer wedges
-     * although the 50ms poll runs), do the ISR's job: ack (W1C), stash,
-     * and seed the normal DPC machinery via SOFT_INTERRUPT (same call
-     * EHCI_InterruptNextSOF makes). Trigger mirrors
-     * EHCI_InterruptService (en&sts&mask). Self-healing and idempotent:
-     * where ISRs flow there is nothing pending and this never engages;
-     * where an interrupt was missed it heals it at poll granularity. */
+    /* Poll-seeded completion: if the HC holds pending+enabled status
+     * that no ISR collected (dead/masked INTx path under APIC on some
+     * boards), do the ISR's job: ack (W1C), stash, and seed the normal
+     * DPC machinery via SOFT_INTERRUPT. Mirrors InterruptService. */
     if (EhciExtension->IsStarted)
     {
         PEHCI_HW_REGISTERS _op = EhciExtension->OperationalRegs;
@@ -3610,14 +3504,10 @@ EHCI_CheckController(IN PVOID ehciExtension)
         ULONG _pp = (_ee & _ss) & EHCI_INTERRUPT_MASK;
         if (_pp)
         {
-            static volatile LONG _seed = 0;
             WRITE_REGISTER_ULONG(&_op->HcStatus.AsULONG, _pp);
             EhciExtension->InterruptStatus.AsULONG |= _pp;
             RegPacket.UsbPortInvalidateController(EhciExtension,
                                                   USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT);
-            if (InterlockedIncrement((PLONG)&_seed) <= 4)
-                DbgPrint("USSEED hc %p bits %08X #%ld\n",
-                         EhciExtension, _pp, (long)_seed);
         }
     }
 }

@@ -1908,13 +1908,6 @@ USBH_ProcessPortStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     DPRINT_SCE("USBH_ProcessPortStateChange ... \n");
 
-    /* TEMP-DIAG USB-vs-HW hunt: trace port changes (pipe #5's device
-     * never gets its descriptor fetch submitted). Revert after test. */
-    DbgPrint("HUBPORT hub %p port %u change %04X status %04X\n",
-             HubExtension, (unsigned)Port,
-             (unsigned)PortStatus->PortChange.AsUshort16,
-             (unsigned)PortStatus->PortStatus.AsUshort16);
-
     ASSERT(Port > 0);
     PortData = &HubExtension->PortData[Port - 1];
 
@@ -4440,12 +4433,6 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
     DPRINT("USBH_CreateDevice: Port - %x, UsbPortStatus - %lX\n",
            Port,
            UsbPortStatus.AsUshort16);
-
-    /* Bisect: una línea por dispositivo enumerado (veredicto de
-     * enganche en 3 min, ~20 por boot). */
-    DbgPrint("HUBCREATE hub %p port %u status %04X\n",
-             HubExtension, (unsigned)Port,
-             (unsigned)UsbPortStatus.AsUshort16);
 
     do
     {

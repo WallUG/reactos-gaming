@@ -274,66 +274,6 @@ volatile BOOLEAN KiIsrStormMasked[256] = {FALSE};
 /* BISECT: once-ever storm reporting (per-tick-once flooded serial). */
 volatile LONG KiIsrStormReported[256] = {0};
 
-/* TEMP-DIAG ghost-object hunt: log the KINTERRUPT behind each vector
- * once (pointer/ISR/lock/mode). Revert after test. */
-volatile LONG KiIsrWhoReported[256] = {0};
-
-FORCEINLINE
-VOID
-KiIsrWhoIs(IN PKINTERRUPT Interrupt)
-{
-    UCHAR Vector = Interrupt->Vector;
-    if (Vector >= 256) return;
-    if (InterlockedExchange(&KiIsrWhoReported[Vector], 1) == 0)
-    {
-        DbgPrint("ISRWHO vector %02x obj %p isr %p lock %p mode %u sync %u\n",
-                 (unsigned)Vector,
-                 (void *)Interrupt,
-                 (void *)Interrupt->ServiceRoutine,
-                 (void *)Interrupt->ActualLock,
-                 (unsigned)Interrupt->Mode,
-                 (unsigned)Interrupt->SynchronizeIrql);
-        /* TEMP-DIAG: resolve the ISR against loaded modules (names
-         * the ghost owner definitively). Revert after test. */
-        {
-            PLIST_ENTRY _le;
-            for (_le = PsLoadedModuleList.Flink;
-                 _le != &PsLoadedModuleList;
-                 _le = _le->Flink)
-            {
-                PLDR_DATA_TABLE_ENTRY _ld =
-                    CONTAINING_RECORD(_le, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-                ULONG_PTR _isr = (ULONG_PTR)Interrupt->ServiceRoutine;
-                ULONG_PTR _base = (ULONG_PTR)_ld->DllBase;
-                /* TEMP-DIAG: dump every usb* module base (resolves
-                 * AFBE/AFBF callers offline). Revert after test. */
-                if (_ld->BaseDllName.Length >= 6 &&
-                    (_ld->BaseDllName.Buffer[0] == L'u' ||
-                     _ld->BaseDllName.Buffer[0] == L'U') &&
-                    (_ld->BaseDllName.Buffer[1] == L's' ||
-                     _ld->BaseDllName.Buffer[1] == L'S') &&
-                    (_ld->BaseDllName.Buffer[2] == L'b' ||
-                     _ld->BaseDllName.Buffer[2] == L'B'))
-                {
-                    DbgPrint("USBMOD %wZ base %p size %lx\n",
-                             &_ld->BaseDllName,
-                             (void *)_base,
-                             (unsigned long)_ld->SizeOfImage);
-                }
-                if (_isr >= _base && _isr < _base + _ld->SizeOfImage)
-                {
-                    DbgPrint("GHOSTMOD vector %02x isr %p in %wZ+%x\n",
-                             (unsigned)Vector,
-                             (void *)Interrupt->ServiceRoutine,
-                             &_ld->BaseDllName,
-                             (unsigned)(_isr - _base));
-                    break;
-                }
-            }
-        }
-    }
-}
-
 /* BISECT: last 5s-heartbeat tick per storming vector. */
 volatile LONG KiIsrStormHeartbeat[256] = {0};
 
@@ -478,8 +418,6 @@ KiInterruptDispatch(IN PKTRAP_FRAME TrapFrame,
     /* Increase interrupt count */
     KeGetCurrentPrcb()->InterruptCount++;
 
-    KiIsrWhoIs(Interrupt); /* TEMP-DIAG ghost hunt */
-
     /* REVERTED 2026-10-08: same-vector nesting guard swallowed normal
      * entries on SMP (QEMU CD lost all completions -> 0x69;
      * ISRTOT stayed empty). Suspect: depth never returns to 0 on
@@ -564,8 +502,6 @@ KiChainedDispatch(IN PKTRAP_FRAME TrapFrame,
 
     /* Increase interrupt count */
     KeGetCurrentPrcb()->InterruptCount++;
-
-    KiIsrWhoIs(Interrupt); /* TEMP-DIAG ghost hunt */
 
     /* REVERTED 2026-10-08: same as KiInterruptDispatch (see above). */
 
@@ -858,26 +794,12 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
         Connected = FALSE;
     }
 
-    /* TEMP-DIAG ATA-vs-HW hunt: report connects on storm-masked vectors
-     * (proves the connect ran after the mask; HalEnable must then have
-     * taken the re-program/unmask path). Revert after test. */
+    /* Storm-masked vectors: chained connects never call HalEnable, so
+     * unmask explicitly here (no-op if already unmasked). */
     if ((Connected) && (Vector < 256) && (KiIsrStormMasked[Vector]))
     {
         KiIsrStormMasked[Vector] = FALSE;
-        /* Self-healing: chained connects never call HalEnable, so
-         * unmask explicitly (no-op if already unmasked). */
         HalRearmSystemInterrupt(Vector);
-        DbgPrint("STORMRECONN vector %02lx reconnected after storm mask (re-armed now)\n",
-                 (unsigned long)Vector);
-    }
-
-    /* TEMP-DIAG: every kernel connect (catches direct KeConnectInterrupt
-     * callers that bypass IoConnectInterrupt). Revert after test. */
-    if (Connected)
-    {
-        DbgPrint("KECONN vector %02lx irql %u cpu %u obj %p caller %p\n",
-                 (unsigned long)Vector, (unsigned)Irql, (unsigned)Number,
-                 (void *)Interrupt, _ReturnAddress());
     }
 
     /* Return to caller */

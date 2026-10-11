@@ -58,7 +58,6 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
     DWORD BytesWritten;
     DWORD Value;
     DWORD ErrCode;
-    DWORD t0inst;
     HANDLE hInstallEvent;
     HANDLE hPipe = INVALID_HANDLE_VALUE;
     LPVOID Environment = NULL;
@@ -76,9 +75,6 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
     WCHAR UuidString[39];
 
     DPRINT("InstallDevice(%S, %d)\n", DeviceInstance, ShowWizard);
-
-    /* TEMP-DIAG SMP-PnP hunt (revert): split spawn vs child time. */
-    t0inst = GetTickCount();
 
     ZeroMemory(&ProcessInfo, sizeof(ProcessInfo));
 
@@ -224,9 +220,6 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
 
     /* Wait for newdev.dll to finish processing */
     WaitForSingleObject(ProcessInfo.hProcess, INFINITE);
-
-    /* TEMP-DIAG SMP-PnP hunt (revert). */
-    DPRINT1("INSTTICK dev %S spawn+child %lu ms\n", DeviceInstance, (unsigned long)(GetTickCount() - t0inst));
 
     /* If the event got signalled, this is success */
     DeviceInstalled = WaitForSingleObject(hInstallEvent, 0) == WAIT_OBJECT_0;
