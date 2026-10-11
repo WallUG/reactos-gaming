@@ -2043,6 +2043,35 @@ EHCI_LinkTransferToQueue(IN PEHCI_EXTENSION EhciExtension,
     }
 }
 
+/* Fase5-SMP fast-collect (INTx muerta): tras enlazar, el HC ejecuta en
+ * ~100-300us pero la colecta esperaba el tick (2ms). Vigila el ultimo TD
+ * hasta ~800us; si termina, siembra el DPC normal (mismo seed que USSEED).
+ * Solo lectura, sin locks: seguro a cualquier IRQL y con spinlock cogido.
+ * Timeout => el timer recoge como siempre. Solo async (bulk/control),
+ * nunca periodico. */
+static VOID
+EHCI_SpinDetectCompletion(IN PEHCI_EXTENSION EhciExtension,
+                          IN PEHCI_HCD_TD FirstTD,
+                          IN PEHCI_HCD_TD TailP)
+{
+    PEHCI_HCD_TD TD = FirstTD;
+    ULONG i;
+
+    while (TD->NextHcdTD && TD->NextHcdTD != TailP)
+        TD = TD->NextHcdTD;
+
+    for (i = 0; i < 40; i++)
+    {
+        if (!(TD->HwTD.Token.Status & EHCI_TOKEN_STATUS_ACTIVE))
+        {
+            RegPacket.UsbPortInvalidateController(EhciExtension,
+                                                  USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT);
+            return;
+        }
+        KeStallExecutionProcessor(20);
+    }
+}
+
 MPSTATUS
 NTAPI
 EHCI_ControlTransfer(IN PEHCI_EXTENSION EhciExtension,
@@ -2226,6 +2255,9 @@ EHCI_ControlTransfer(IN PEHCI_EXTENSION EhciExtension,
     ASSERT(EhciEndpoint->HcdTailP->NextHcdTD == NULL);
     ASSERT(EhciEndpoint->HcdTailP->AltNextHcdTD == NULL);
 
+    /* Fast-collect: siembra DPC si el HC ya termino (ver helper). */
+    EHCI_SpinDetectCompletion(EhciExtension, FirstTD, EhciEndpoint->HcdTailP);
+
     return MP_STATUS_SUCCESS;
 }
 
@@ -2407,6 +2439,9 @@ EHCI_BulkTransfer(IN PEHCI_EXTENSION EhciExtension,
 
     ASSERT(EhciEndpoint->HcdTailP->NextHcdTD == 0);
     ASSERT(EhciEndpoint->HcdTailP->AltNextHcdTD == 0);
+
+    /* Fast-collect: siembra DPC si el HC ya termino (ver helper). */
+    EHCI_SpinDetectCompletion(EhciExtension, FirstTD, EhciEndpoint->HcdTailP);
 
     return MP_STATUS_SUCCESS;
 }
