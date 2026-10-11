@@ -1017,6 +1017,14 @@ HalDisableSystemInterrupt(IN ULONG Vector,
     _enable();
 }
 
+/* Fase5-SMP: FALSE en los HAL PIC (8259: solo IRQ 0-15). */
+BOOLEAN
+NTAPI
+HalIsApicMode(VOID)
+{
+    return FALSE;
+}
+
 /*
  * @implemented
  */

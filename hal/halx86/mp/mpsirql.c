@@ -311,6 +311,13 @@ HalDisableSystemInterrupt(ULONG Vector,
 
 VOID
 NTAPI
+HalIsApicMode(VOID)
+{
+  return TRUE;
+}
+
+VOID
+NTAPI
 HalRearmSystemInterrupt(ULONG Vector)
 {
   ULONG irq;

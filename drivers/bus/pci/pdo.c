@@ -24,6 +24,9 @@
 #define PCI_ADDRESS_MEMORY_ADDRESS_MASK_64     0xfffffffffffffff0ull
 #define PCI_ADDRESS_IO_ADDRESS_MASK_64         0xfffffffffffffffcull
 
+/* TRUE solo en HAL APIC (ver hal.spec); en PIC el 8259 no pasa de 15. */
+extern BOOLEAN NTAPI HalIsApicMode(VOID);
+
 /*** PRIVATE *****************************************************************/
 
 /* Fase5-SMP: PIR->APIC esta cableado fijo en silicio ICH/PCH (PIRQA->GSI16
@@ -83,6 +86,14 @@ PciPirqToGsi(
             if (DxxIrBase != NULL) Usable = TRUE;
         }
         DbgPrint("PIRPROBE rcba %08x usable %d\n", RcbaRaw, Usable);
+        /* TEMP-107: dump crudo DxxIR para validar offsets en silicio. */
+        if (Usable)
+        {
+            DbgPrint("PIRDUMP %08x %08x %08x %08x %08x %08x %08x %08x %08x\n",
+                     DxxIrBase[0], DxxIrBase[1], DxxIrBase[2],
+                     DxxIrBase[3], DxxIrBase[4], DxxIrBase[5],
+                     DxxIrBase[6], DxxIrBase[7], DxxIrBase[8]);
+        }
     }
     if (!Usable) return FALSE;
 
@@ -945,8 +956,10 @@ PdoQueryResources(
             Descriptor->ShareDisposition = CmResourceShareShared;
             Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
             /* En APIC el cable real es 16+letra PIRQ (ver PciPirqToGsi);
-             * el InterruptLine es el ruteo PIC y apunta a pines muertos. */
-            if (PciPirqToGsi(DeviceExtension->PciDevice->BusNumber,
+             * el InterruptLine es el ruteo PIC y apunta a pines muertos.
+             * En PIC se conserva el InterruptLine (8259: 0-15). */
+            if (HalIsApicMode() &&
+                PciPirqToGsi(DeviceExtension->PciDevice->BusNumber,
                              DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
                              PciConfig.u.type0.InterruptPin,
                              &_gsi))

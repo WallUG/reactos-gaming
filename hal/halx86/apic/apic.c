@@ -887,11 +887,12 @@ HalEnableSystemInterrupt(
          * PCI model is active-high - stays clean and PIC HAL - which
          * programs no polarity at all - is fast; APIC-UP storms too, so
          * SMP is exonerated). Linux parity (PCI conforms => low/level).
-         * Edge keeps the ISA default (high). Native GSIs (>= 16) are
-         * left alone. Explicit MADT polarity above still wins. */
+         * Edge keeps the ISA default (high). Native GSIs 16-23 are PCI
+         * PIRQ hardwire (low/level en silicio ICH/PCH) y tambien van low.
+         * GSI >= 24 se dejan como vengan. Explicit MADT wins. */
         if (!_explicitPol &&
             InterruptMode == LevelSensitive &&
-            Index < 16)
+            Index < 24)
             ReDirReg.Polarity = 1; /* active-low */
     }
 
@@ -936,11 +937,19 @@ HalDisableSystemInterrupt(
     IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
 }
 
+/* Fase5-SMP: TRUE en los HAL APIC (este), FALSE en los PIC. Lo usa
+ * pci.sys para reportar GSI 16+letra solo donde hay IOAPIC. */
+BOOLEAN
+NTAPI
+HalIsApicMode(VOID)
+{
+    return TRUE;
+}
+
 VOID
 NTAPI
 HalRearmSystemInterrupt(
-    IN ULONG Vector)
-{
+    IN ULONG Vector){
     /* Clear ONLY the mask bit of a storm-masked RTE (no reprogram:
      * vector/dest/trigger stay as programmed). Self-healing for the
      * kernel storm guard: unmask on driver connect (chained connects
