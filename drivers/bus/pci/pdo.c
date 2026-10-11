@@ -37,6 +37,90 @@ extern BOOLEAN NTAPI HalIsApicMode(VOID);
  * RCBA (D31IR=RCBA+0x3140, un dword por dispositivo) y reportar 16+letra.
  * Solo si RCBA+DxxIR verifican (enable, base sana, bytes <= 7); si no,
  * FALSE y conducta anterior. */
+static UCHAR
+PciReadLpcRc(
+    _In_ UCHAR Letter)
+{
+    ULONG Reg = (Letter < 4) ? (0x60 + Letter) : (0x68 + (Letter - 4));
+    ULONG Addr = 0x8000F800 | (Reg & 0xFC);
+    WRITE_PORT_ULONG((PULONG)0xCF8, Addr);
+    return (UCHAR)((READ_PORT_ULONG((PULONG)0xCFC) >> ((Reg & 3) * 8)) & 0xFF);
+}
+
+static VOID
+PciWriteLpcRc(
+    _In_ UCHAR Letter,
+    _In_ UCHAR Value)
+{
+    ULONG Reg = (Letter < 4) ? (0x60 + Letter) : (0x68 + (Letter - 4));
+    ULONG Addr = 0x8000F800 | (Reg & 0xFC);
+    ULONG Shift = (Reg & 3) * 8, Cur;
+    WRITE_PORT_ULONG((PULONG)0xCF8, Addr);
+    Cur = READ_PORT_ULONG((PULONG)0xCFC);
+    Cur = (Cur & ~(0xFFUL << Shift)) | ((ULONG)Value << Shift);
+    WRITE_PORT_ULONG((PULONG)0xCF8, Addr);
+    WRITE_PORT_ULONG((PULONG)0xCFC, Cur);
+}
+
+static const UCHAR PciPirqDevOrder[9] = {31, 30, 29, 28, 27, 26, 25, 22, 20};
+
+/* Fase5-SMP: congelar ruteo. El DxxIR del BIOS varia por sesion (todo-A
+ * en una, E/G en otra) y no cuadra con ROUT/3Ch. Para cada interno con
+ * 3Ch valido: si su letra actual no rutea a su IRQ (ROUT deshabilitado
+ * o distinto), buscar letra con ROUT==IRQ (o primera deshabilitada y
+ * habilitarla) y programar nibble+RC. Solo si difiere; en QEMU coherente
+ * es no-op. */
+static VOID
+PciFreezePirqRouting(
+    _In_ volatile ULONG *Base)
+{
+    static const UCHAR Targets[] = {29, 26, 27, 20, 31};
+    ULONG t, i, Size;
+    for (t = 0; t < sizeof(Targets); t++)
+    {
+        UCHAR Dev = Targets[t], Pin = 0, Irq = 0xFF, Cur, L = 0xFF, Rc;
+        ULONG DxxIr;
+        PCI_SLOT_NUMBER Slot;
+        for (i = 0; i < 9; i++)
+        {
+            if (PciPirqDevOrder[i] == Dev) break;
+        }
+        if (i >= 9) continue;
+        Slot.u.AsULONG = 0;
+        Slot.u.bits.DeviceNumber = Dev;
+        Slot.u.bits.FunctionNumber = 0;
+        Size = HalGetBusDataByOffset(PCIConfiguration, 0, Slot.u.AsULONG,
+                                     &Pin, 0x3D, sizeof(Pin));
+        if (Size != sizeof(Pin) || Pin < 1 || Pin > 4) continue;
+        Size = HalGetBusDataByOffset(PCIConfiguration, 0, Slot.u.AsULONG,
+                                     &Irq, 0x3C, sizeof(Irq));
+        if (Size != sizeof(Irq) || Irq == 0 || Irq == 0xFF || Irq > 15) continue;
+        DxxIr = Base[i];
+        if (DxxIr & 0x88888888) continue;
+        Cur = (UCHAR)((DxxIr >> ((Pin - 1) * 4)) & 0x7);
+        Rc = PciReadLpcRc(Cur);
+        if (Rc != 0x80 && (Rc & 0xF) == Irq) continue; /* coherente */
+        for (L = 0; L < 8; L++)
+        {
+            Rc = PciReadLpcRc(L);
+            if (Rc != 0x80 && (Rc & 0xF) == Irq) break;
+        }
+        if (L >= 8)
+        {
+            for (L = 0; L < 8; L++)
+            {
+                if (PciReadLpcRc(L) == 0x80) break;
+            }
+            if (L >= 8) continue;
+        }
+        DxxIr = (DxxIr & ~(0xFUL << ((Pin - 1) * 4))) | ((ULONG)L << ((Pin - 1) * 4));
+        Base[i] = DxxIr;
+        PciWriteLpcRc(L, Irq);
+        DbgPrint("PIRSET dev %u pin %u irq %u: letra %c->%c rc %02x\n",
+                 Dev, Pin, Irq, 'A' + Cur, 'A' + L, PciReadLpcRc(L));
+    }
+}
+
 static BOOLEAN
 PciPirqToGsi(
     _In_ ULONG BusNumber,
@@ -87,6 +171,8 @@ PciPirqToGsi(
             if (DxxIrBase != NULL) Usable = TRUE;
         }
         DbgPrint("PIRPROBE rcba %08x usable %d\n", RcbaRaw, Usable);
+        /* Congelar ruteo antes de que nadie lea letras (ver arriba). */
+        if (Usable) PciFreezePirqRouting(DxxIrBase);
     }
     if (!Usable) return FALSE;
 
