@@ -2070,18 +2070,13 @@ SeAccessCheck(
 
     if (DesiredAccess == 0)
     {
+        /* Paridad Windows: abrir con acceso 0 es legal (handle sin
+         * derechos). Denegarlo rompe a quien abre claves/COM solo para
+         * consultar (merge HKCR de Wine -> registro DirectShow con
+         * 0x80070005 + NtQueryKey 0xc0000022). Sin derechos no hay riesgo. */
         *GrantedAccess = PreviouslyGrantedAccess;
-        if (PreviouslyGrantedAccess == 0)
-        {
-            DPRINT1("Request for zero access to an object. Denying.\n");
-            *AccessStatus = STATUS_ACCESS_DENIED;
-            ret = FALSE;
-        }
-        else
-        {
-            *AccessStatus = STATUS_SUCCESS;
-            ret = TRUE;
-        }
+        *AccessStatus = STATUS_SUCCESS;
+        ret = TRUE;
     }
     else
     {
