@@ -8,6 +8,36 @@
 - Defaults gaming: `HKCU\Software\Wine\Direct3D` DWORD `csmt=0`.
 - Build: RosBE-Unix 2.2.1, `configure.sh -DENABLE_ROSTESTS=1 -DENABLE_ROSAPPS=1`, `ninja -j12 bootcd` (ver `build-LH-Stable/bootcd.iso` ~504 MB).
 
+## SMP — multiprocesador real (rama `smp-port`)
+
+> Estrategia: **NT5.2 como base productiva**; sus capas SMP se portan a NT6
+> por etapas (HAL → drivers → kernel → shims). Sin migración.
+
+- Estado: tags `[SMP-104]` → `[SMP-123]` (commit `51f44f6`).
+  ISO: `/tmp/build-gaming-smp/bootcd.iso` `90e76cb10733975a153edf7e38b47168`.
+- Hitos: escritorio APIC a 2 CPUs en QEMU q35; **instalación completa en
+  hardware real** (BIOSTAR H81MHV3, i3-4170, GT 710): dos arranques desde
+  HDD hasta escritorio.
+- Fixes:
+  - IMCR simétrico en vía ACPI; router PIRQ bus 0 vía RCBA
+    (`D31IR=RCBA+0x3140`, offsets Q35 validados); gate `HalIsApicMode()`;
+    RTEs 16-23 en nivel activo-bajo.
+  - IRQ compartido bendecido en PnP (`Min=Max=GSI`); congelación de ruteo
+    (`PciFreezePirqRouting`).
+  - `HalStormMaskVector` (storm-held en rearm/enable) que desbloqueó
+    EHCI#1→HDA; drenaje `STATESTS` (W1C) en HDA; ATA en POLL si `NOINTx`.
+  - `usbstor` desestima sense obsoleta (fin del `ASSERT SenseSrb`);
+    `umpnpmgr` omite nodos ya iniciados (cero errores 31).
+  - `SeAccessCheck` concede acceso 0 (paridad Windows; arregla el registro
+    DirectShow `0x80070005` + `NtQueryKey 0xc0000022` del merge HKCR).
+  - Causa raíz de `Could not load SYSTEM.ALT`: BIOS fantasma AHCI +
+    `rdisk(1)→rdisk(0)` en `freeldr.ini`.
+- Puerta por build: banner `[SMP-xxx]` + `md5sum` + QEMU TCG single-thread
+  (KVM anidado inestable); TEMP revertible, limpieza antes de cada hito.
+- Pendiente: wake de ambos codecs HDA, bulk USB residual, porte Wine de
+  `dm*.dll`/`dp*.dll`, pata MF-Wine + DLLs FFmpeg en ISO, dxgkrnl mínimo
+  viable (WDDM hoy: headers + esqueleto de 366 líneas, no runtime).
+
 ## Media — juegos verificados
 
 Deja tus capturas y clips aquí y se verán en esta tabla. Rutas sugeridas:
