@@ -116,8 +116,6 @@ PciFreezePirqRouting(
         DxxIr = (DxxIr & ~(0xFUL << ((Pin - 1) * 4))) | ((ULONG)L << ((Pin - 1) * 4));
         Base[i] = DxxIr;
         PciWriteLpcRc(L, Irq);
-        DbgPrint("PIRSET dev %u pin %u irq %u: letra %c->%c rc %02x\n",
-                 Dev, Pin, Irq, 'A' + Cur, 'A' + L, PciReadLpcRc(L));
     }
 }
 
@@ -170,19 +168,8 @@ PciPirqToGsi(
             DxxIrBase = MmMapIoSpace(PhysAddr, 0x40, MmNonCached);
             if (DxxIrBase != NULL) Usable = TRUE;
         }
-        DbgPrint("PIRPROBE rcba %08x usable %d\n", RcbaRaw, Usable);
         /* Congelar ruteo antes de que nadie lea letras (ver arriba). */
         if (Usable) PciFreezePirqRouting(DxxIrBase);
-        /* TEMP-115: mapa completo DxxIR+ROUT (cazar al asertor de B). */
-        if (Usable)
-        {
-            DbgPrint("PIRMAP %08x %08x %08x %08x %08x %08x %08x %08x %08x / %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                     DxxIrBase[0], DxxIrBase[1], DxxIrBase[2],
-                     DxxIrBase[3], DxxIrBase[4], DxxIrBase[5],
-                     DxxIrBase[6], DxxIrBase[7], DxxIrBase[8],
-                     PciReadLpcRc(0), PciReadLpcRc(1), PciReadLpcRc(2), PciReadLpcRc(3),
-                     PciReadLpcRc(4), PciReadLpcRc(5), PciReadLpcRc(6), PciReadLpcRc(7));
-        }
     }
     if (!Usable) return FALSE;
 
@@ -192,8 +179,6 @@ PciPirqToGsi(
     if (DxxIr & 0x88888888) return FALSE; /* reservados o basura */
     Letter = (UCHAR)((DxxIr >> ((InterruptPin - 1) * 4)) & 0x7);
     *Gsi = 16 + Letter;
-    DbgPrint("PIRPROG bus 0 dev %lu pin %d -> PIRQ%c -> GSI %lu\n",
-             DeviceNumber, InterruptPin, 'A' + Letter, *Gsi);
     return TRUE;
 }
 

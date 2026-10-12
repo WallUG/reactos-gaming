@@ -453,8 +453,6 @@ FdoCallHWInitialize(
                 DeviceExtension->Interrupt[i] = NULL;
                 return Status;
             }
-            /* TEMP-116: ver si 14/15 conectan y con que vector. */
-            DbgPrint("ATACONN vec %lu status %08x\n", MappedIrq[i], Status);
         }
     }
 

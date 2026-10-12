@@ -656,14 +656,9 @@ IopCheckResourceDescriptor(
                         }
                         if (!Silent)
                         {
-                            /* TEMP-110: disposiciones para cazar al
-                             * reclamante exclusivo de 16/20 en HW. */
-                            DPRINT1("Resource conflict: IRQ (0x%x 0x%x vs. 0x%x 0x%x) sh %d/%d lv %d/%d\n",
+                            DPRINT1("Resource conflict: IRQ (0x%x 0x%x vs. 0x%x 0x%x)\n",
                                     ResDesc->u.Interrupt.Vector, ResDesc->u.Interrupt.Level,
-                                    ResDesc2->u.Interrupt.Vector, ResDesc2->u.Interrupt.Level,
-                                    ResDesc->ShareDisposition, ResDesc2->ShareDisposition,
-                                    !!(ResDesc->Flags & CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE),
-                                    !!(ResDesc2->Flags & CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE));
+                                    ResDesc2->u.Interrupt.Vector, ResDesc2->u.Interrupt.Level);
                         }
 
                         Result = TRUE;

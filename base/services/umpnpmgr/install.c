@@ -30,6 +30,8 @@
 
 #include "precomp.h"
 
+#include <cfgmgr32.h>
+
 #define NDEBUG
 #include <debug.h>
 
@@ -77,6 +79,21 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
     DPRINT("InstallDevice(%S, %d)\n", DeviceInstance, ShowWizard);
 
     ZeroMemory(&ProcessInfo, sizeof(ProcessInfo));
+
+    /* Fase5-SMP: saltar dispositivos ya arrancados sin problema (el kernel
+     * rechaza su reinstalacion con 31; reintentarlo solo genera ruido).
+     * Espeja PiActionStartDevice (procede si hay problema). */
+    {
+        DEVINST DevInst = 0;
+        ULONG DevStatus = 0, DevProblem = 0;
+        if (CM_Locate_DevNodeW(&DevInst, (DEVINSTID_W)DeviceInstance, CM_LOCATE_DEVNODE_NORMAL) == CR_SUCCESS &&
+            CM_Get_DevNode_Status(&DevStatus, &DevProblem, DevInst, 0) == CR_SUCCESS &&
+            (DevStatus & DN_STARTED) && DevProblem == 0)
+        {
+            DPRINT("Already started, skipping: %S\n", DeviceInstance);
+            return TRUE;
+        }
+    }
 
     if (RegOpenKeyExW(hEnumKey,
                       DeviceInstance,

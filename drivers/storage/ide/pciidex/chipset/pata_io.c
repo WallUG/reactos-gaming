@@ -9,16 +9,6 @@
 
 #include "pciidex.h"
 
-static ULONG AtaPioTraceCount = 0;
-#define ATA_PIO_TRACE(_r_, _p_, _b_, _c_) do { \
-    if (AtaPioTraceCount < 30) { \
-        AtaPioTraceCount++; \
-        DbgPrint("ATAPIO %c port %p cnt %lu first %04x last %04x\n", \
-                 (_r_), (PVOID)(_p_), (ULONG)(_c_), \
-                 (unsigned)(((_c_) != 0) ? (_b_)[0] : 0), \
-                 (unsigned)(((_c_) != 0) ? (_b_)[(_c_)-1] : 0)); \
-    } } while (0)
-
 /* FUNCTIONS ******************************************************************/
 
 VOID
@@ -35,7 +25,6 @@ AtaWriteBlock16(
         WRITE_REGISTER_BUFFER_USHORT(Port, Buffer, Count);
     else
         WRITE_PORT_BUFFER_USHORT(Port, Buffer, Count);
-    ATA_PIO_TRACE('W', Port, Buffer, Count);
 }
 
 VOID
@@ -52,7 +41,6 @@ AtaReadBlock16(
         READ_REGISTER_BUFFER_USHORT(Port, Buffer, Count);
     else
         READ_PORT_BUFFER_USHORT(Port, Buffer, Count);
-    ATA_PIO_TRACE('R', Port, Buffer, Count);
 }
 
 VOID
@@ -69,7 +57,6 @@ AtaWriteBlock32(
         WRITE_REGISTER_BUFFER_ULONG(Port, Buffer, Count);
     else
         WRITE_PORT_BUFFER_ULONG(Port, Buffer, Count);
-    ATA_PIO_TRACE('W', Port, (PUSHORT)Buffer, Count * 2);
 }
 
 VOID
@@ -86,7 +73,6 @@ AtaReadBlock32(
         READ_REGISTER_BUFFER_ULONG(Port, Buffer, Count);
     else
         READ_PORT_BUFFER_ULONG(Port, Buffer, Count);
-    ATA_PIO_TRACE('R', Port, (PUSHORT)Buffer, Count * 2);
 }
 
 UCHAR
@@ -982,19 +968,6 @@ PataPrepareIo(
      */
     if (IsNEC_98)
         Request->Flags |= REQUEST_FLAG_POLL;
-
-    /* TEMP-118: ver si el POLL dispara y con que descriptor. */
-    {
-        static ULONG _pp = 0;
-        if (_pp < 6)
-        {
-            _pp++;
-            DbgPrint("ATAPOLL force %d type %d len %lu\n",
-                     ChanData->Controller->InterruptDesc.Type != CmResourceTypeInterrupt,
-                     ChanData->Controller->InterruptDesc.Type,
-                     Request->DataTransferLength);
-        }
-    }
 
     /* Fase5-SMP: el controlador no tiene interrupcion asignada (SATA2
      * 00:1f.5: NOINTx por silicio): ningun ISR completara multisector

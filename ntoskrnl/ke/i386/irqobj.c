@@ -319,17 +319,8 @@ VOID
 NTAPI
 KiIsrDumpTotals(VOID)
 {
-    UCHAR Vector;
-    for (Vector = 0; Vector < 255; Vector++)
-    {
-        ULONG Total = KiIsrTotalCount[Vector];
-        if (Total != 0)
-        {
-            DbgPrint("ISRTOT vector %02x total %lu\n",
-                     (unsigned)Vector, (unsigned long)Total);
-        }
-    }
-    DbgPrint("ISRTOT vector ff total %lu\n", (unsigned long)KiIsrTotalCount[255]);
+    /* Vaciado: los contadores siguen para el guard; el dump por boot
+     * se quito en la limpieza (el storm-path ya reporta). */
 }
 
 FORCEINLINE

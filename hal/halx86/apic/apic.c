@@ -434,15 +434,7 @@ HalpRoundRobinLapicId(UCHAR Index)
      * and BSP wedges waiting for it. Pin everything to the BSP caller
      * so the AP never takes devices (clock/IPI/TLB still work); if HW
      * boots, confirmed. Revert-or-policy after test. */
-    (void)_rr; (void)_cpu; (void)Index;
-    {
-        static BOOLEAN _pinmsg = FALSE;
-        if (!_pinmsg)
-        {
-            _pinmsg = TRUE;
-            DbgPrint("PINHACK active: all device IRQs to BSP only\n");
-        }
-    }
+     (void)_rr; (void)_cpu; (void)Index;
     return (UCHAR)(ApicRead(APIC_ID) >> 24);
 }
 
@@ -543,16 +535,6 @@ HalpGetRootInterruptVector(
 
 Exit:
 
-    /* TEMP-114: mapa irq->vec por connect (cazar pin de a1). */
-    ;
-    {
-        static UCHAR _ivSeen[256] = {0};
-        if (Vector != 0 && !_ivSeen[Vector & 0xFF])
-        {
-            _ivSeen[Vector & 0xFF] = 1;
-            DbgPrint("IRQVEC irq %lu -> vec %02x\n", BusInterruptLevel, Vector);
-        }
-    }
     *OutAffinity = HalpDefaultInterruptAffinity;
     ASSERT(HalpDefaultInterruptAffinity);
 
