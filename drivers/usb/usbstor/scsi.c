@@ -224,7 +224,19 @@ USBSTOR_CSWCompletionRoutine(
         // should happen only when a sense request was sent
         if (Request != FDODeviceExtension->ActiveSrb)
         {
-            ASSERT(IoStack->Parameters.Scsi.Srb == &Context->SenseSrb);
+            /* Stale/overlapped sense completion (SMP/reset race con un
+             * unico SenseSrb por FDO): el IRP ya no referencia nuestro
+             * sense (otro request tomo el control). No inyectar el sense
+             * en el SRB equivocado (corrompe autosense en release y para
+             * en kdb en debug): dropear; el request nuevo se completa
+             * solo con su propia finalizacion. */
+            if (FDODeviceExtension->ActiveSrb == NULL ||
+                IoStack->Parameters.Scsi.Srb != &Context->SenseSrb)
+            {
+                DPRINT1("USBSTOR_CSWCompletionRoutine: stale sense completion (req %p active %p), dropping\n",
+                        Request, FDODeviceExtension->ActiveSrb);
+                return STATUS_MORE_PROCESSING_REQUIRED;
+            }
             FDODeviceExtension->ActiveSrb->SenseInfoBufferLength = Request->DataTransferLength;
             Request = FDODeviceExtension->ActiveSrb;
             IoStack->Parameters.Scsi.Srb = Request;
