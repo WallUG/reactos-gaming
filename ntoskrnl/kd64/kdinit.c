@@ -14,7 +14,7 @@
 
 /* Shipment tag: bump for every ISO handed to HW testers (banner shows
  * it; md5 stays authoritative). Format SMP-<NNN>. */
-#define SMP_SHIP_TAG "SMP-119"
+#define SMP_SHIP_TAG "SMP-120"
 
 #define NDEBUG
 #include <debug.h>
