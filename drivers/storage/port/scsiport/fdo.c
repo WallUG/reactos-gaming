@@ -449,10 +449,12 @@ FdoCallHWInitialize(
 
             if (!(NT_SUCCESS(Status)))
             {
-                DPRINT1("Could not connect interrupt %d\n", InterruptVector[i]);
+                DbgPrint("Could not connect interrupt %d\n", InterruptVector[i]);
                 DeviceExtension->Interrupt[i] = NULL;
                 return Status;
             }
+            /* TEMP-116: ver si 14/15 conectan y con que vector. */
+            DbgPrint("ATACONN vec %lu status %08x\n", MappedIrq[i], Status);
         }
     }
 
