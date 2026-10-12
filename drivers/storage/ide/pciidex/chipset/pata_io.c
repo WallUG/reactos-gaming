@@ -983,6 +983,13 @@ PataPrepareIo(
     if (IsNEC_98)
         Request->Flags |= REQUEST_FLAG_POLL;
 
+    /* Fase5-SMP: el controlador no tiene interrupcion asignada (SATA2
+     * 00:1f.5: NOINTx por silicio): ningun ISR completara multisector
+     * (los READ/WRITE normales no traen POLL y esperan eterno: ficheros
+     * a tamano 0). Pollear siempre en ese caso. */
+    if (ChanData->Controller->InterruptDesc.Type != CmResourceTypeInterrupt)
+        Request->Flags |= REQUEST_FLAG_POLL;
+
     ChanData->BytesToTransfer = Request->DataTransferLength;
     ChanData->DataBuffer = Request->DataBuffer;
 }
