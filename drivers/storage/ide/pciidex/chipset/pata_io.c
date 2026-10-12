@@ -983,6 +983,19 @@ PataPrepareIo(
     if (IsNEC_98)
         Request->Flags |= REQUEST_FLAG_POLL;
 
+    /* TEMP-118: ver si el POLL dispara y con que descriptor. */
+    {
+        static ULONG _pp = 0;
+        if (_pp < 6)
+        {
+            _pp++;
+            DbgPrint("ATAPOLL force %d type %d len %lu\n",
+                     ChanData->Controller->InterruptDesc.Type != CmResourceTypeInterrupt,
+                     ChanData->Controller->InterruptDesc.Type,
+                     Request->DataTransferLength);
+        }
+    }
+
     /* Fase5-SMP: el controlador no tiene interrupcion asignada (SATA2
      * 00:1f.5: NOINTx por silicio): ningun ISR completara multisector
      * (los READ/WRITE normales no traen POLL y esperan eterno: ficheros
