@@ -121,7 +121,7 @@ PciFreezePirqRouting(
     }
 }
 
-static BOOLEAN
+static BOOLEAN __attribute__((unused))
 PciPirqToGsi(
     _In_ ULONG BusNumber,
     _In_ ULONG DeviceNumber,
@@ -755,7 +755,6 @@ PdoQueryResourceRequirements(
 
         if (PciConfig.u.type0.InterruptPin != 0)
         {
-            ULONG _gsi;
             Descriptor->Option = 0; /* Required */
             Descriptor->Type = CmResourceTypeInterrupt;
             Descriptor->ShareDisposition = CmResourceShareShared;
@@ -763,18 +762,6 @@ PdoQueryResourceRequirements(
 
             Descriptor->u.Interrupt.MinimumVector = 0;
             Descriptor->u.Interrupt.MaximumVector = 0xFF;
-            /* Fase5-SMP: fijar el GSI PIRQ para que el arbitro no reubique
-             * (HDA 16->0x14 en fase usuario = pin vacio + storm a1).
-             * Solo en APIC; si no hay GSI, rango abierto como antes. */
-            if (HalIsApicMode() &&
-                PciPirqToGsi(DeviceExtension->PciDevice->BusNumber,
-                             DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
-                             PciConfig.u.type0.InterruptPin,
-                             &_gsi))
-            {
-                Descriptor->u.Interrupt.MinimumVector = _gsi;
-                Descriptor->u.Interrupt.MaximumVector = _gsi;
-            }
         }
     }
     else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_BRIDGE_TYPE)
@@ -1055,23 +1042,15 @@ PdoQueryResources(
             (PciConfig.u.type0.InterruptLine != 0) &&
             (PciConfig.u.type0.InterruptLine != 0xFF))
         {
-            ULONG _irq = PciConfig.u.type0.InterruptLine, _gsi;
             Descriptor->Type = CmResourceTypeInterrupt;
             Descriptor->ShareDisposition = CmResourceShareShared;
             Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-            /* En APIC el cable real es 16+letra PIRQ (ver PciPirqToGsi);
-             * el InterruptLine es el ruteo PIC y apunta a pines muertos.
-             * En PIC se conserva el InterruptLine (8259: 0-15). */
-            if (HalIsApicMode() &&
-                PciPirqToGsi(DeviceExtension->PciDevice->BusNumber,
-                             DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
-                             PciConfig.u.type0.InterruptPin,
-                             &_gsi))
-            {
-                _irq = _gsi;
-            }
-            Descriptor->u.Interrupt.Level = _irq;
-            Descriptor->u.Interrupt.Vector = _irq;
+            /* Fase5-SMP-119: vuelta al InterruptLine (ruteo 103, el que
+             * instalaba): en este PCH los ROUT mandan a pines 0-15 en
+             * ambos modos; el freeze (112) los deja coherentes y el
+             * storm-held (114) contiene. GSI16+ partia el ack. */
+            Descriptor->u.Interrupt.Level = PciConfig.u.type0.InterruptLine;
+            Descriptor->u.Interrupt.Vector = PciConfig.u.type0.InterruptLine;
             Descriptor->u.Interrupt.Affinity = 0xFFFFFFFF;
         }
 
