@@ -101,3 +101,36 @@ Pendiente conocido: `nv4_disp` free proc a veces persigue punteros basura (nonde
 
 - #30 Contencion de faults del driver en switches de modo (pdevobj.c): 0x50 en `nv4+0x2102ef` leyendo pool liberado tras doble switch consecutivo (UAF del driver, misma zona que el 0x50 del free proc). `PDEVOBJ_bSwitchMode` partido en `Unsafe` + wrapper SEH: un fault aborta el switch con restore best-effort y devuelve FALSE en vez de bugcheck; semaforos siempre liberados; APC-count preservado. TEMP-HARDEN hasta confirmar.
 - #31 Ratón Win32 (no dinput): Halo nunca adquiere el mouse por dinput (teclado sí) -> usa ClipCursor + posiciones absolutas sin recentrar; el clip lo clava en bordes. Traza `GAMING-MOUSE` en `UserClipCursor`/`UserSetCursorPos` (win32k) para ver rects. Pendiente: decidir fix (p.ej. recentrado asistido o `MouseWarpOverride=force` si el juego tolera dinput).
+
+---
+## FASE SMP/APIC + HDA (GT 710, rama smp-port, Oct-2026)
+Estado: desktop 1360x768 + NVIDIA (gráfica y HDMI-audio) funcionando en APIC SMP **con Realtek deshabilitado en BIOS** (andamio, no fix). Sin Realtek: cero storms, verbs HDA#1 OK, `DxEngLockHdev`.
+
+### Árbol de fallos probado en HW real (H81 + GT 710)
+1. **Resurrección de storms (A1)**: `USBPORT_TimerDpc` rearma cada vector held cada ~500ms (`usbport.c:1711-1721`) + probation global cada-1000 en el HAL (`apic.c` viejo) = re-floods de +1000 exactos cada ~250s. FIX **F1** (tag SMP-124): probes por vector rate-limitados (1200) + gate de línea quieta (`RemoteIRR==0`); verificado 8+ min sin re-flood.
+2. **Ruteo GSI tras puentes (M1)**: GPU (bus1 dev0 INTA) → GSI 16 y HDA-NVIDIA (INTB) → GSI 17 según `_SB.PCI0.P0P2._PRT=AR02`; PnP daba IRQ 10/11 (`$PIR`) → ISRs muertas de hambre + floods en líneas USB (`b1` nack 4924/ack 32, `a1` nack 7840/ack 0). FIX **F2-1** (tag SMP-125): walk de puentes por config-space + quirk `P0P2` + gate `HalIsApicMode()` (en PIC, inerte: verificado, sin `PCIFIX`); verificado: verbs HDA#1 `0x102`→`0x0`, cero storms, desktop pinta.
+3. **HDA#2-Realtek (dev 27)**: wedge duro de CPU en el primer `hda_write16(CORBWP)` — localizado por DIAG al write (lock OK, reads OK, sin loops en su ISR). Solo SMP-4 (UP y PIC pasan con el mismo binario); delay 20s no lo mueve → concurrencia, no settle. **ABIERTO** (ver F2-1b/d).
+4. **USB#1 (dev 29)**: DxxIR dice 17 (tras freeze que lo fuerza, `PCIFRZ 6->1`), `_PRT` dice 23, `$PIR`/3Ch dice 10. Triple desacuerdo; su GSI verdadero pendiente de micro-experimento. No bloquea.
+5. **HDA#1 bajo UP**: verbs `0x102` (bajo SMP-4 responde). Observación no bloqueante.
+6. **`0x19 BAD_POOL_HEADER`** (`expool.c:279`, linkage, tag vecino `SeSd`) una vez en arranque de servicios ya en desktop; no repitió. En vigilancia (primera vez que APIC llegaba a servicios).
+
+### Tabla de cambios (esta fase)
+| # | Fichero | Cambio | Por qué | Estado |
+|---|---|---|---|---|
+| 32 | `hal/halx86/apic/apic.c` | F1: rearm seguro (sin lotería global; probe por vector + `RemoteIRR==0` + contadores `resurr`/`RearmCalls`); DIAG `IRQMAP`/`RTEEN`/`RTEMASK`(+reread)/`RTEARM`/`RTEDIS` | A1 + mapa IRQ→vector→RTE por boot | [PERMANENT] F1; [TEMP-DEBUG] los prints |
+| 33 | `ntoskrnl/ke/i386/irqobj.c` | tick en prints storm; censo `ack`/`nack` por ISR encadenada; `ISRVEC` extendido | Probar quién reclama cada línea (USB niega 7840, IDE reclama todo) | [TEMP-DEBUG] revertir |
+| 34 | `ntoskrnl/io/iomgr/irq.c` | `IRQCONN ok obj/isr/vector` en éxito | Resolver VECSTAMP→driver (mapeó `b1`=USB#1, `a1`=USB#2) | [TEMP-DEBUG] revertir |
+| 35 | `ntoskrnl/ke/hbd.c` | `ISRCNS` cada ~60s vía `KiIsrDumpTotals()` | Cazar goteo bajo el umbral (A2) | [TEMP-DEBUG] revertir |
+| 36 | `drivers/bus/pci/pdo.c` | F2-0 walk de puentes + `PCIBRDG`; F2-1a `PCIDEV`/`PCIFRZ` + firma con `Slot`; F2-1 enforce `(1,0)`→AR02 + `PCIFIX` + gate APIC | M1: GPU→16/HDA→17; el gate evita IRQ 16+ en PIC | [PERMANENT] walk+enforce si se generaliza `_PRT`; [TEMP-DEBUG] los prints |
+| 37 | `drivers/wdm/audio/hdaudbus/hdac_controller.cpp` | F2-1b prints por paso en `SendHDACmds`; F2-1c/d delay 20s ante verbo `0x200f0000` | Localizar wedge HDA#2 (es el write) + discriminar timing (descartado) | [TEMP-DEBUG] revertir (el delay sobre todo) |
+
+### Mapa de despliegue (disco PC real, verificado por SHA)
+- `ntoskrnl.exe` (=`ntkrnlmp` F1) `76f73e3d…` + `hal.dll` (=`halmacpi` F1) `43b752c5…` + `pci.sys` (F2-1+gate) `0f9040a5…` + `hdaudbus.sys` (F2-1b/d) `f1fed7cb…` → `C:\ReactOS\system32[\drivers]`
+- Spares: `ntoskrnl-UP-T5.exe`, `hal-PIC-T5.dll` (boot PIC por renombrado); backups `.preT0`/`.preF2*` en el mismo dir.
+- Logs serie en `\\wsl…\home\demox\T0|T5|F1|F2-0|F2-1a|F2-1b|F2-1c|F2-1d|F2-1|E1|E2-*.txt`; tablas ACPI en `acpi/` (MADT: 1 IOAPIC, overrides solo 0→2 y 9→9).
+
+### Pendientes (orden)
+- [ ] HDA#2: break serial en el wedge (`bt`) o quirk-skip dev27 documentado; fix raíz = readiness-gate en CORB o serialización (F2-1d apunta a concurrencia).
+- [ ] dev29: probar GSI 22/23 y ver acks.
+- [ ] soak 15 min (rama `skip-busy` de F1 sin ejercitar).
+- [ ] Revertir todo [TEMP-DEBUG] (33, 34, 35, prints de 32/36/37) antes de publicar; decidir PERMANENT de F1/F2-1; F2 genérico = evaluar `_PRT` (nadie lo llama hoy: `acpica/resources/rsxface.c:174`).
