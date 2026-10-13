@@ -271,6 +271,13 @@ volatile ULONG KiIsrTotalCount[256] = {0};
  * reported from the connect path, which always runs). */
 volatile BOOLEAN KiIsrStormMasked[256] = {FALSE};
 
+/* TEMP-DIAG T5 (smp-port GPU/HDA hunt): per-vector ISR verdict census.
+ * Only the chained dispatch has a return value (normal path ISRs return
+ * void). Counters, never prints: the serial line can't take per-ISR
+ * lines at storm rate. Dumped with the totals. Revert after test. */
+volatile ULONG KiIsrAckCount[256] = {0};
+volatile ULONG KiIsrNackCount[256] = {0};
+
 /* BISECT: once-ever storm reporting (per-tick-once flooded serial). */
 volatile LONG KiIsrStormReported[256] = {0};
 
@@ -319,8 +326,21 @@ VOID
 NTAPI
 KiIsrDumpTotals(VOID)
 {
-    /* Vaciado: los contadores siguen para el guard; el dump por boot
-     * se quito en la limpieza (el storm-path ya reporta). */
+    /* TEMP-DIAG T5: periodic census, called from the heartbeat DPC.
+     * Catches trickle/starvation below the storm threshold (A2) and
+     * who acks what (ack/nack). Revert after test. */
+    ULONG _v;
+    for (_v = 0; _v < 256; _v++)
+    {
+        if (KiIsrTotalCount[_v] > 20)
+        {
+            DbgPrint("ISRCNS vector %02x total %lu ack %lu nack %lu\n",
+                     (unsigned)_v,
+                     (unsigned long)KiIsrTotalCount[_v],
+                     (unsigned long)KiIsrAckCount[_v],
+                     (unsigned long)KiIsrNackCount[_v]);
+        }
+    }
 }
 
 FORCEINLINE
@@ -350,8 +370,8 @@ KiIsrStormCheck(IN UCHAR Vector)
         HalStormMaskVector(Vector);
         if (InterlockedExchange(&KiIsrStormReported[Vector], 1) == 0)
         {
-            DbgPrint("ISRSTORM vector %02x storming (skip, no mask)\n",
-                     (unsigned)Vector);
+            DbgPrint("ISRSTORM vector %02x storming (skip, no mask) tick %lu\n",
+                     (unsigned)Vector, (unsigned long)Tick);
             KiIsrStormHeartbeat[Vector] = (LONG)Tick;
             /* TEMP-DIAG stale-IDT hunt: dump the LIVE IDT gate for
              * this vector (template+object vs Unexpected stub?).
@@ -390,9 +410,11 @@ KiIsrStormCheck(IN UCHAR Vector)
                     {
                         if (KiIsrTotalCount[_v] > 20)
                         {
-                            DbgPrint("ISRVEC vector %02x total %lu\n",
+                            DbgPrint("ISRVEC vector %02x total %lu ack %lu nack %lu\n",
                                      (unsigned)_v,
-                                     (unsigned long)KiIsrTotalCount[_v]);
+                                     (unsigned long)KiIsrTotalCount[_v],
+                                     (unsigned long)KiIsrAckCount[_v],
+                                     (unsigned long)KiIsrNackCount[_v]);
                         }
                     }
                 }
@@ -402,8 +424,9 @@ KiIsrStormCheck(IN UCHAR Vector)
         {
             /* Still storming 5s later: heartbeat with running total. */
             KiIsrStormHeartbeat[Vector] = (LONG)Tick;
-            DbgPrint("ISRSTORM vector %02x still storming, total %lu\n",
-                     (unsigned)Vector, (unsigned long)KiIsrTotalCount[Vector]);
+            DbgPrint("ISRSTORM vector %02x still storming, total %lu tick %lu\n",
+                     (unsigned)Vector, (unsigned long)KiIsrTotalCount[Vector],
+                     (unsigned long)Tick);
         }
         KiIsrStormMasked[Vector] = TRUE; /* TEMP-DIAG (see decl) */
     }
@@ -568,6 +591,14 @@ KiChainedDispatch(IN PKTRAP_FRAME TrapFrame,
             /* Call the ISR */
             Handled = Interrupt->ServiceRoutine(Interrupt,
                                                 Interrupt->ServiceContext);
+
+            /* TEMP-DIAG T5: verdict census (own block: C89-safe).
+             * All entries of one chain share the vector. Revert after test. */
+            {
+                UCHAR _vec = Interrupt->Vector;
+                if (Handled) InterlockedIncrement((PLONG)&KiIsrAckCount[_vec]);
+                else InterlockedIncrement((PLONG)&KiIsrNackCount[_vec]);
+            }
 
             /* Back out */
             KiIsrMarkIdle();
@@ -797,7 +828,8 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
     }
 
     /* Storm-masked vectors: chained connects never call HalEnable, so
-     * unmask explicitly here (no-op if already unmasked). */
+     * unmask explicitly here (no-op if already unmasked; F1: stays held
+     * while the line still asserts). */
     if ((Connected) && (Vector < 256) && (KiIsrStormMasked[Vector]))
     {
         KiIsrStormMasked[Vector] = FALSE;
