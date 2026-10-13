@@ -205,7 +205,14 @@ static UINT16 HDACommandAddr(UINT32 cmd) {
 }
 
 NTSTATUS SendHDACmds(PFDO_CONTEXT fdoCtx, ULONG count, PHDAUDIO_CODEC_TRANSFER CodecTransfer) {
+	/* TEMP-DIAG F2-1b (smp-port HDA#2 wedge): HDA#2 cuelga entre
+	 * RunSingleHDACmd/Called y HDA_WaitForTransfer/called (lock del
+	 * interrupt o MMIO CORBWP). Un print por paso. Revert after test. */
+	SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL,
+		"F2-1b enter sts %x intsts %x\n",
+		hda_read16(fdoCtx, STATESTS), hda_read32(fdoCtx, INTSTS));
 	WdfInterruptAcquireLock(fdoCtx->Interrupt);
+	SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL, "F2-1b lock ok\n");
 	for (ULONG i = 0; i < count; i++) {
 		PHDAUDIO_CODEC_TRANSFER transfer = &CodecTransfer[i];
 		RtlZeroMemory(&transfer->Input, sizeof(transfer->Input));
@@ -214,6 +221,8 @@ NTSTATUS SendHDACmds(PFDO_CONTEXT fdoCtx, ULONG count, PHDAUDIO_CODEC_TRANSFER C
 
 		//Add command to corb
 		UINT16 wp = hda_read16(fdoCtx, CORBWP);
+		SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL,
+			"F2-1b corbwp %x rp %x\n", wp, hda_read16(fdoCtx, CORBRP));
 		if (wp == 0xffff) {
 			//Something wrong, controller likely went to sleep
 			SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL,
@@ -240,9 +249,11 @@ NTSTATUS SendHDACmds(PFDO_CONTEXT fdoCtx, ULONG count, PHDAUDIO_CODEC_TRANSFER C
 		fdoCtx->corb.buf[wp] = transfer->Output.Command;
 
 		hda_write16(fdoCtx, CORBWP, wp);
+		SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL, "F2-1b corbwp written\n");
 	}
 
 	WdfInterruptReleaseLock(fdoCtx->Interrupt);
+	SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL, "F2-1b lock out\n");
 	return STATUS_SUCCESS;
 }
 
@@ -252,6 +263,25 @@ NTSTATUS RunSingleHDACmd(PFDO_CONTEXT fdoCtx, ULONG val, ULONG* res) {
 
 	SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL,
 		"%s: Called. Command: 0x%x\n", __func__, val);
+
+	/* TEMP-DIAG F2-1c/F2-1d (smp-port HDA#2 wedge): el primer verbo del
+	 * Realtek (codec 2, vendor-id) cuelga la CPU en SMP-4 pero no en UP:
+	 * timing (settle tras D0Entry) vs concurrencia. Retrasarlo 20s una
+	 * vez por boot discrimina (5s no movio nada). Solo este verbo exacto
+	 * (HDA#1 usa 0xf0000). Revert after test. */
+	{
+		static LONG Done = 0;
+		if (val == 0x200f0000 && InterlockedCompareExchange(&Done, 1, 0) == 0)
+		{
+			LARGE_INTEGER Delay;
+			SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL,
+				"F2-1c delay 20s pre-verb\n");
+			Delay.QuadPart = -200000000LL;
+			KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+			SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL,
+				"F2-1c delay done\n");
+		}
+	}
 
 	NTSTATUS status = SendHDACmds(fdoCtx, 1, &transfer);
 	if (!NT_SUCCESS(status)) {

@@ -116,13 +116,145 @@ PciFreezePirqRouting(
         DxxIr = (DxxIr & ~(0xFUL << ((Pin - 1) * 4))) | ((ULONG)L << ((Pin - 1) * 4));
         Base[i] = DxxIr;
         PciWriteLpcRc(L, Irq);
+        /* F2-1a DIAG: decision del freeze (caza el dev29: 17 vs 23). */
+        DbgPrint("PCIFRZ dev %u pin %u irq %u letra %u -> %u\n",
+                 (unsigned)Dev, (unsigned)Pin, (unsigned)Irq,
+                 (unsigned)Cur, (unsigned)L);
     }
+}
+
+/* F2-0/F2-1 (smp-port GPU/HDA storm): bridge-walk. Behind-bridge
+ * devices (GPU/HDA en bus 1) caian al InterruptLine $PIR (10/11) porque
+ * PciPirqToGsi solo cubria bus 0: sus pines reales van a GSI 16-19
+ * (todas las _PRT-APIC de la placa). F2-0 LOGUEA la cadena; F2-1 la
+ * resuelve (ver PciRootBridgeGsi) y la impone.
+ * Swizzle estandar por nivel: pin_padre = (pin + dev_secundario) % 4. */
+static BOOLEAN PciBridgesScanned = FALSE;
+static UCHAR PciParBus[16], PciParDev[16], PciParFunc[16], PciParValid[16];
+
+static VOID
+PciScanBridges(VOID)
+{
+    ULONG bus, dev, func;
+    UCHAR Hdr = 0, Sec = 0, Sub = 0, Size;
+    PCI_SLOT_NUMBER Slot;
+
+    PciBridgesScanned = TRUE;
+    RtlZeroMemory(PciParValid, sizeof(PciParValid));
+    for (bus = 0; bus < 16; bus++)
+    {
+        for (dev = 0; dev < 32; dev++)
+        {
+            Slot.u.AsULONG = 0;
+            Slot.u.bits.DeviceNumber = dev;
+            Slot.u.bits.FunctionNumber = 0;
+            Size = HalGetBusDataByOffset(PCIConfiguration, bus,
+                                         Slot.u.AsULONG, &Hdr, 0x0E,
+                                         sizeof(Hdr));
+            if (Size != sizeof(Hdr)) continue;
+            for (func = 0; func < 8; func++)
+            {
+                if (func > 0 && !(Hdr & 0x80)) break;
+                Slot.u.bits.FunctionNumber = func;
+                Size = HalGetBusDataByOffset(PCIConfiguration, bus,
+                                             Slot.u.AsULONG, &Hdr, 0x0E,
+                                             sizeof(Hdr));
+                if (Size != sizeof(Hdr)) continue;
+                if ((Hdr & 0x7F) != 1) continue; /* no es bridge */
+                Size = HalGetBusDataByOffset(PCIConfiguration, bus,
+                                             Slot.u.AsULONG, &Sec, 0x19,
+                                             sizeof(Sec));
+                if (Size != sizeof(Sec)) continue;
+                Size = HalGetBusDataByOffset(PCIConfiguration, bus,
+                                             Slot.u.AsULONG, &Sub, 0x1A,
+                                             sizeof(Sub));
+                if (Size != sizeof(Sub)) continue;
+                if (Sec < 16 && Sec <= Sub)
+                {
+                    /* Un secondary = un puente (topologias sanas). */
+                    if (!PciParValid[Sec])
+                    {
+                        PciParValid[Sec] = TRUE;
+                        PciParBus[Sec] = (UCHAR)bus;
+                        PciParDev[Sec] = (UCHAR)dev;
+                        PciParFunc[Sec] = (UCHAR)func;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Camina hasta bus 0 LOGUEANDO (formatos PCIBRDG estables). TRUE si
+ * llega, con la tripleta raiz (dev/func/pin 0-based). */
+static BOOLEAN
+PciWalkToRoot(
+    _In_ ULONG BusNumber,
+    _In_ ULONG DeviceNumber,
+    _In_ UCHAR InterruptPin,
+    _Out_ ULONG *RootDev,
+    _Out_ ULONG *RootFunc,
+    _Out_ ULONG *RootPin)
+{
+    ULONG bus, dev, func, pin, lvl;
+
+    if (BusNumber >= 16 || InterruptPin < 1 || InterruptPin > 4) return FALSE;
+    if (!PciBridgesScanned) PciScanBridges();
+
+    bus = BusNumber; dev = DeviceNumber; pin = InterruptPin - 1; lvl = 0;
+    func = 0;
+    DbgPrint("PCIBRDG start bus %lu dev %lu pin %u\n",
+             BusNumber, DeviceNumber, (unsigned)InterruptPin);
+    while (bus != 0 && bus < 16 && lvl < 8)
+    {
+        if (!PciParValid[bus]) break;
+        /* Swizzle estándar: pin_padre = (pin + dev_secundario) % 4. */
+        pin = (pin + dev) % 4;
+        DbgPrint("PCIBRDG lvl %lu bridge bus %u dev %u func %u -> pin %u\n",
+                 lvl, (unsigned)PciParBus[bus], (unsigned)PciParDev[bus],
+                 (unsigned)PciParFunc[bus], (unsigned)pin);
+        dev = PciParDev[bus];
+        func = PciParFunc[bus];
+        bus = PciParBus[bus];
+        lvl++;
+    }
+    if (bus == 0)
+    {
+        DbgPrint("PCIBRDG root dev %lu func %lu pin %u (resolver en ARxx)\n",
+                 dev, func, (unsigned)pin);
+        *RootDev = dev;
+        *RootFunc = func;
+        *RootPin = pin;
+        return TRUE;
+    }
+    DbgPrint("PCIBRDG no-parent bus %lu (cadena incompleta)\n", bus);
+    return FALSE;
+}
+
+/* F2-1: resolver de tripleta raiz a GSI. TEMP-FIX especifico de placa
+ * con citas firmware; FALSE = conducta anterior para todo lo demas.
+ * P0P2 (bus 0 dev 1 func 0, PEG): _SB.PCI0.P0P2._PRT = AR02, identidad
+ * pin->GSI (DSDT: P0P2 _ADR 0x00010000 + tabla AR02 16/17/18/19).
+ * GPU (bus1 dev0 INTA -> pin 0) => 16; HDA-NV (INTB -> pin 1) => 17. */
+static BOOLEAN
+PciRootBridgeGsi(
+    _In_ ULONG Dev,
+    _In_ ULONG Func,
+    _In_ ULONG Pin,
+    _Out_ ULONG *Gsi)
+{
+    if (Dev == 1 && Func == 0 && Pin < 4)
+    {
+        *Gsi = 16 + Pin;
+        return TRUE;
+    }
+    return FALSE;
 }
 
 static BOOLEAN
 PciPirqToGsi(
     _In_ ULONG BusNumber,
-    _In_ ULONG DeviceNumber,
+    _In_ PCI_SLOT_NUMBER Slot,
     _In_ UCHAR InterruptPin,
     _Out_ ULONG *Gsi)
 {
@@ -130,13 +262,50 @@ PciPirqToGsi(
     static BOOLEAN Usable = FALSE;
     static volatile ULONG *DxxIrBase = NULL;
     static const UCHAR Devs[] = {31, 30, 29, 28, 27, 26, 25, 22, 20};
+    ULONG DeviceNumber = Slot.u.bits.DeviceNumber;
     PCI_SLOT_NUMBER LpcSlot;
     ULONG RcbaRaw = 0, Size, i, Idx;
     PHYSICAL_ADDRESS PhysAddr;
     ULONG DxxIr;
     UCHAR Letter;
+    /* F2-1a DIAG: identidad + CMD (bit INTx-disable) + Line/Pin por
+     * candidato. Cubre GPU/HDA/xHCI/MEI/bus1dev0/EHCI#2. Revert after test. */
+    {
+        ULONG Id = 0xFFFFFFFF, Cmd = 0;
+        UCHAR Line = 0xFF, Pin = 0;
+        HalGetBusDataByOffset(PCIConfiguration, BusNumber,
+                              Slot.u.AsULONG, &Id, 0x00, sizeof(Id));
+        HalGetBusDataByOffset(PCIConfiguration, BusNumber,
+                              Slot.u.AsULONG, &Cmd, 0x04, sizeof(USHORT));
+        HalGetBusDataByOffset(PCIConfiguration, BusNumber,
+                              Slot.u.AsULONG, &Line, 0x3C, sizeof(Line));
+        HalGetBusDataByOffset(PCIConfiguration, BusNumber,
+                              Slot.u.AsULONG, &Pin, 0x3D, sizeof(Pin));
+        DbgPrint("PCIDEV bus %lu dev %lu func %lu ven %04lx devid %04lx cmd %04lx line %02x pin %u\n",
+                 BusNumber, (ULONG)Slot.u.bits.DeviceNumber,
+                 (ULONG)Slot.u.bits.FunctionNumber,
+                 Id & 0xFFFF, (Id >> 16) & 0xFFFF, Cmd & 0xFFFF,
+                 Line, (unsigned)Pin);
+    }
 
-    if (BusNumber != 0) return FALSE;
+    if (BusNumber != 0)
+    {
+        /* F2-1: caminar + resolver + imponer, SOLO en APIC (en PIC el
+         * 8259 no pasa de 15: un GSI 16+ seria invalido). Sin tripleta
+         * o sin regla para el puente raiz: FALSE = conducta anterior. */
+        ULONG _rd = 0, _rf = 0, _rp = 0, _rg = 0;
+        if (HalIsApicMode() &&
+            PciWalkToRoot(BusNumber, DeviceNumber, InterruptPin,
+                          &_rd, &_rf, &_rp) &&
+            PciRootBridgeGsi(_rd, _rf, _rp, &_rg))
+        {
+            DbgPrint("PCIFIX bus %lu dev %lu pin %u -> gsi %lu\n",
+                     BusNumber, DeviceNumber, (unsigned)InterruptPin, _rg);
+            *Gsi = _rg;
+            return TRUE;
+        }
+        return FALSE;
+    }
     if (InterruptPin < 1 || InterruptPin > 4) return FALSE;
 
     for (i = 0; i < sizeof(Devs); i++)
@@ -179,6 +348,9 @@ PciPirqToGsi(
     if (DxxIr & 0x88888888) return FALSE; /* reservados o basura */
     Letter = (UCHAR)((DxxIr >> ((InterruptPin - 1) * 4)) & 0x7);
     *Gsi = 16 + Letter;
+    /* F2-0: consistencia bus 0 (cruzar offline contra AR00). */
+    DbgPrint("PCIGSI bus 0 dev %lu pin %u -> gsi %lu\n",
+             DeviceNumber, (unsigned)InterruptPin, *Gsi);
     return TRUE;
 }
 
@@ -753,7 +925,7 @@ PdoQueryResourceRequirements(
              * Solo en APIC; si no hay GSI, rango abierto como antes. */
             if (HalIsApicMode() &&
                 PciPirqToGsi(DeviceExtension->PciDevice->BusNumber,
-                             DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                             DeviceExtension->PciDevice->SlotNumber,
                              PciConfig.u.type0.InterruptPin,
                              &_gsi))
             {
@@ -1049,7 +1221,7 @@ PdoQueryResources(
              * En PIC se conserva el InterruptLine (8259: 0-15). */
             if (HalIsApicMode() &&
                 PciPirqToGsi(DeviceExtension->PciDevice->BusNumber,
-                             DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                             DeviceExtension->PciDevice->SlotNumber,
                              PciConfig.u.type0.InterruptPin,
                              &_gsi))
             {
