@@ -117,12 +117,12 @@ Estado: desktop 1360x768 + NVIDIA (gráfica y HDMI-audio) funcionando en APIC SM
 ### Tabla de cambios (esta fase)
 | # | Fichero | Cambio | Por qué | Estado |
 |---|---|---|---|---|
-| 32 | `hal/halx86/apic/apic.c` | F1: rearm seguro (sin lotería global; probe por vector + `RemoteIRR==0` + contadores `resurr`/`RearmCalls`); DIAG `IRQMAP`/`RTEEN`/`RTEMASK`(+reread)/`RTEARM`/`RTEDIS` | A1 + mapa IRQ→vector→RTE por boot | [PERMANENT] F1; [TEMP-DEBUG] los prints |
-| 33 | `ntoskrnl/ke/i386/irqobj.c` | tick en prints storm; censo `ack`/`nack` por ISR encadenada; `ISRVEC` extendido | Probar quién reclama cada línea (USB niega 7840, IDE reclama todo) | [TEMP-DEBUG] revertir |
-| 34 | `ntoskrnl/io/iomgr/irq.c` | `IRQCONN ok obj/isr/vector` en éxito | Resolver VECSTAMP→driver (mapeó `b1`=USB#1, `a1`=USB#2) | [TEMP-DEBUG] revertir |
-| 35 | `ntoskrnl/ke/hbd.c` | `ISRCNS` cada ~60s vía `KiIsrDumpTotals()` | Cazar goteo bajo el umbral (A2) | [TEMP-DEBUG] revertir |
-| 36 | `drivers/bus/pci/pdo.c` | F2-0 walk de puentes + `PCIBRDG`; F2-1a `PCIDEV`/`PCIFRZ` + firma con `Slot`; F2-1 enforce `(1,0)`→AR02 + `PCIFIX` + gate APIC | M1: GPU→16/HDA→17; el gate evita IRQ 16+ en PIC | [PERMANENT] walk+enforce si se generaliza `_PRT`; [TEMP-DEBUG] los prints |
-| 37 | `drivers/wdm/audio/hdaudbus/hdac_controller.cpp` | F2-1b prints por paso en `SendHDACmds`; F2-1c/d delay 20s ante verbo `0x200f0000` | Localizar wedge HDA#2 (es el write) + discriminar timing (descartado) | [TEMP-DEBUG] revertir (el delay sobre todo) |
+| 32 | `hal/halx86/apic/apic.c` | F1: rearm seguro (sin lotería global; probe por vector + `RemoteIRR==0` + contadores `resurr`/`RearmCalls`); DIAG `IRQMAP`/`RTEEN`/`RTEMASK`(+reread)/`RTEARM`/`RTEDIS` | A1 + mapa IRQ→vector→RTE por boot | [PERMANENT] F1 + estado; prints REVERTIDOS (strip SMP-128) |
+| 33 | `ntoskrnl/ke/i386/irqobj.c` | tick en prints storm; censo `ack`/`nack` por ISR encadenada; `ISRVEC` extendido | Probar quién reclama cada línea (USB niega 7840, IDE reclama todo) | [REVERTIDO en strip] |
+| 34 | `ntoskrnl/io/iomgr/irq.c` | `IRQCONN ok obj/isr/vector` en éxito | Resolver VECSTAMP→driver (mapeó `b1`=USB#1, `a1`=USB#2) | [REVERTIDO en strip] |
+| 35 | `ntoskrnl/ke/hbd.c` | `ISRCNS` cada ~60s vía `KiIsrDumpTotals()` | Cazar goteo bajo el umbral (A2) | [REVERTIDO en strip] |
+| 36 | `drivers/bus/pci/pdo.c` | F2-0 walk de puentes + `PCIBRDG`; F2-1a `PCIDEV`/`PCIFRZ` + firma con `Slot`; F2-1 enforce `(1,0)`→AR02 + `PCIFIX` + gate APIC | M1: GPU→16/HDA→17; el gate evita IRQ 16+ en PIC | [PERMANENT-candidate] walk+enforce; prints REVERTIDOS (strip SMP-128) |
+| 37 | `drivers/wdm/audio/hdaudbus/hdac_controller.cpp` | F2-1b prints por paso en `SendHDACmds`; F2-1c/d delay 20s ante verbo `0x200f0000` | Localizar wedge HDA#2 (es el write) + discriminar timing (descartado) + mute F2-2d (kept, sin prints) | [PARCIALMENTE REVERTIDO: prints y delay fuera; mute queda] |
 
 ### Mapa de despliegue (disco PC real, verificado por SHA)
 - `ntoskrnl.exe` (=`ntkrnlmp` F1) `76f73e3d…` + `hal.dll` (=`halmacpi` F1) `43b752c5…` + `pci.sys` (F2-1+gate) `0f9040a5…` + `hdaudbus.sys` (F2-1b/d) `f1fed7cb…` → `C:\ReactOS\system32[\drivers]`
@@ -130,7 +130,11 @@ Estado: desktop 1360x768 + NVIDIA (gráfica y HDMI-audio) funcionando en APIC SM
 - Logs serie en `\\wsl…\home\demox\T0|T5|F1|F2-0|F2-1a|F2-1b|F2-1c|F2-1d|F2-1|E1|E2-*.txt`; tablas ACPI en `acpi/` (MADT: 1 IOAPIC, overrides solo 0→2 y 9→9).
 
 ### Pendientes (orden)
-- [ ] HDA#2: break serial en el wedge (`bt`) o quirk-skip dev27 documentado; fix raíz = readiness-gate en CORB o serialización (F2-1d apunta a concurrencia).
+- [x] Strip serie SMP-128: fuera todos los `DbgPrint` TEMP (verificado 0 markers en los 4 binarios); quedan F1, F2-1+gate, mute F2-2d. DIAG preexistente de rama intacto.
+- [ ] HDA#2 sordo bajo APIC (verbs `0x102`, su ISR en `81` no entrega) con ambos drivers: no bloquea (boot sigue). Siguiente capa.
+- [ ] HDA#2 wedge (CORBWP) con mute levantado: pendiente de retest con binarios limpios (el wedge se vio con DIAG; confirmar que el mute basta).
 - [ ] dev29: probar GSI 22/23 y ver acks.
 - [ ] soak 15 min (rama `skip-busy` de F1 sin ejercitar).
-- [ ] Revertir todo [TEMP-DEBUG] (33, 34, 35, prints de 32/36/37) antes de publicar; decidir PERMANENT de F1/F2-1; F2 genérico = evaluar `_PRT` (nadie lo llama hoy: `acpica/resources/rsxface.c:174`).
+- [ ] `0x19`: en vigilancia (un run, no repitió).
+- [ ] Disco lleva binarios CON prints (pre-strip): refrescar kernel+hal+pci+hdaudbus en próximo toque.
+- [ ] Antes de publicar: decidir PERMANENT de F1/F2-1/mute; F2 genérico = evaluar `_PRT` (nadie lo llama hoy: `acpica/resources/rsxface.c:174`).
