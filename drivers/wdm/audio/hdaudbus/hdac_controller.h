@@ -17,6 +17,8 @@ NTSTATUS StartHDAController(PFDO_CONTEXT fdoCtx);
 NTSTATUS StopHDAController(PFDO_CONTEXT fdoCtx);
 NTSTATUS SendHDACmds(PFDO_CONTEXT fdoCtx, ULONG count, PHDAUDIO_CODEC_TRANSFER CodecTransfer);
 NTSTATUS RunSingleHDACmd(PFDO_CONTEXT fdoCtx, ULONG val, ULONG* res);
+/* F2-2d: mute condicional del ISR NVIDIA (lo activa/limpia fdo.cpp). */
+extern volatile LONG HdaNvidiaMuted;
 
 //Old
 BOOLEAN NTAPI hda_interrupt(WDFINTERRUPT Interrupt, ULONG MessageID);

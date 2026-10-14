@@ -481,11 +481,6 @@ HalpAllocateSystemInterrupt(
     /* Save irq in the table */
     HalpVectorToIndex[Vector] = Irq;
 
-    /* TEMP-DIAG T0 (smp-port GPU/HDA hunt): per-boot IRQ->vector->RTE map.
-     * Reconstructs the table statically from the log. Revert after test. */
-    DbgPrint("IRQMAP alloc irq %u -> vector %02lx rte %u\n",
-             (unsigned)Irq, (unsigned long)Vector, (unsigned)Irq);
-
     return Vector;
 }
 
@@ -927,14 +922,6 @@ HalEnableSystemInterrupt(
     /* Write back the entry (unmasked) */
     ApicWriteIORedirectionEntry(Index, ReDirReg);
 
-    /* TEMP-DIAG T0 (smp-port GPU/HDA hunt): final programmed RTE state.
-     * Revert after test. */
-    DbgPrint("RTEEN vec %02lx idx %u %s pol %u mask %u dst %02x\n",
-             (unsigned long)Vector, (unsigned)Index,
-             (ReDirReg.TriggerMode == APIC_TGM_Level) ? "level" : "edge",
-             (unsigned)ReDirReg.Polarity, (unsigned)ReDirReg.Mask,
-             (unsigned)ReDirReg.Destination);
-
     return TRUE;
 }
 
@@ -959,11 +946,6 @@ HalDisableSystemInterrupt(
 
     /* Write back lower dword */
     IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
-
-    /* TEMP-DIAG T5: distinguish storm-mask from disconnect-mask in the
-     * A1 hunt. Disconnects are rare. Revert after test. */
-    DbgPrint("RTEDIS vec %02lx idx %u masked\n",
-             (unsigned long)Vector, (unsigned)Index);
 }
 
 VOID
@@ -973,41 +955,13 @@ HalStormMaskVector(
 {
     IOAPIC_REDIRECTION_REGISTER ReDirReg;
     UCHAR Index;
-    ULONG Before;
-    if (Vector >= RTL_NUMBER_OF(HalpVectorToIndex))
-    {
-        /* TEMP-DIAG T0: unmaskable vector. Revert after test. */
-        DbgPrint("RTEMASK vec %02lx UNMAPPED (no table entry)\n",
-                 (unsigned long)Vector);
-        return;
-    }
+    if (Vector >= RTL_NUMBER_OF(HalpVectorToIndex)) return;
     Index = HalpVectorToIndex[Vector];
-    if (Index >= APIC_MAX_IRQ)
-    {
-        /* TEMP-DIAG T0: message-based (MSI/MSI-X) vector, no RTE to mask:
-         * explains a guard that "masks" but the line keeps firing.
-         * Revert after test. */
-        DbgPrint("RTEMASK vec %02lx NO-RTE (msi/unmapped idx %u)\n",
-                 (unsigned long)Vector, (unsigned)Index);
-        return;
-    }
+    if (Index >= APIC_MAX_IRQ) return;
     ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);
-    Before = ReDirReg.Long0;
     ReDirReg.Mask = 1;
     IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
     HalpStormHeld[Vector & 0xFF] = 1;
-    HalpStormRearmCalls[Vector & 0xFF] = 0; /* F1: fresh probe window */
-    /* TEMP-DIAG T0: prove the mask write took. Revert after test. */
-    DbgPrint("RTEMASK vec %02lx idx %u rte %08lx -> %08lx held\n",
-             (unsigned long)Vector, (unsigned)Index,
-             (unsigned long)Before, (unsigned long)ReDirReg.Long0);
-    /* TEMP-DIAG T5: immediate reread: did the mask bit stick in HW?
-     * Distinguishes "write lost" from "later unmasked" (A1).
-     * Revert after test. */
-    ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);
-    DbgPrint("RTEMASK vec %02lx idx %u reread %08lx\n",
-             (unsigned long)Vector, (unsigned)Index,
-             (unsigned long)ReDirReg.Long0);
 }
 
 /* Fase5-SMP: TRUE en los HAL APIC (este), FALSE en los PIC. Lo usa
@@ -1049,29 +1003,14 @@ HalRearmSystemInterrupt(
     if (WasHeld)
     {
         RearmCalls = ++HalpStormRearmCalls[Vector & 0xFF];
-        if (RearmCalls < STORM_REARM_PROBE_CALLS) return; /* cooling, silent */
-        if (ReDirReg.RemoteIRR)
-        {
-            /* Probe due but line still asserting: stay held. Print once
-             * per window (calls keeps growing past PROBE). */
-            if (RearmCalls == STORM_REARM_PROBE_CALLS)
-            {
-                DbgPrint("RTEARM vec %02lx idx %u skip-busy remoted resurr %u\n",
-                         (unsigned long)Vector, (unsigned)Index,
-                         (unsigned)HalpStormResurrect[Vector & 0xFF]);
-            }
-            return;
-        }
+        if (RearmCalls < STORM_REARM_PROBE_CALLS) return; /* cooling */
+        /* Probe due but line still asserting: stay held. */
+        if (ReDirReg.RemoteIRR) return;
         HalpStormHeld[Vector & 0xFF] = 0;
         HalpStormRearmCalls[Vector & 0xFF] = 0;
         HalpStormResurrect[Vector & 0xFF]++;
     }
     if (ReDirReg.Mask == 0) return;
-    /* TEMP-DIAG T5: who unmasks a line (A1 hunt: re-flood needs this).
-     * Only runs when something actually changes. Revert after test. */
-    DbgPrint("RTEARM vec %02lx idx %u unmask washeld %u resurr %u\n",
-             (unsigned long)Vector, (unsigned)Index, (unsigned)WasHeld,
-             (unsigned)HalpStormResurrect[Vector & 0xFF]);
     ReDirReg.Mask = 0;
     IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
 }

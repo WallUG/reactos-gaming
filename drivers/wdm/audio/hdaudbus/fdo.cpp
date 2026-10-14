@@ -571,6 +571,13 @@ Fdo_EvtDeviceD0Entry(
 
     status = STATUS_SUCCESS;
 
+    /* F2-2d: abrir ventana de mute NVIDIA para FDOs no-NVIDIA desde
+     * D0Entry (los primeros verbs corren aqui, no en el scan). Ver
+     * hda_interrupt. */
+    if (fdoCtx->venId != VEN_NVIDIA) {
+        InterlockedExchange(&HdaNvidiaMuted, 1);
+    }
+
     if (fdoCtx->venId == VEN_INTEL) {
         UINT32 val;
         pci_read_cfg_dword(&fdoCtx->BusInterface, INTEL_HDA_CGCTL, &val);
@@ -774,12 +781,12 @@ Fdo_EvtDeviceSelfManagedIoInit(
     _In_ WDFDEVICE Device
 )
 {
-    NTSTATUS status = STATUS_SUCCESS;
-    PFDO_CONTEXT fdoCtx;
+	NTSTATUS status = STATUS_SUCCESS;
+	PFDO_CONTEXT fdoCtx;
 
-    fdoCtx = Fdo_GetContext(Device);
+	fdoCtx = Fdo_GetContext(Device);
 
-    WdfChildListBeginScan(WdfFdoGetDefaultChildList(Device));
+	WdfChildListBeginScan(WdfFdoGetDefaultChildList(Device));
 
     fdoCtx->numCodecs = 0;
 #if ENABLE_HDA
@@ -847,5 +854,9 @@ Fdo_EvtDeviceSelfManagedIoInit(
 
     SklHdAudBusPrint(DEBUG_LEVEL_INFO, DBG_INIT,
         "hda scan complete\n");
+    /* F2-2d: cerrar la ventana (ver arriba). */
+    if (fdoCtx->venId != VEN_NVIDIA) {
+        InterlockedExchange(&HdaNvidiaMuted, 0);
+    }
     return status;
 }

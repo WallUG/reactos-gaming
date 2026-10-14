@@ -132,15 +132,6 @@ IoConnectInterrupt(OUT PKINTERRUPT *InterruptObject,
         }
     }
 
-    /* TEMP-DIAG T0 (smp-port GPU/HDA hunt): success print, pairs with the
-     * IRQCONN FAIL above. Maps obj/isr -> vector at connect time so a later
-     * ISRSTORM VECSTAMP obj can be resolved to a driver. Revert after test. */
-    DbgPrint("IRQCONN ok obj %p isr %p vector %02lx irql %u mode %s share %u\n",
-             (void*)&IoInterrupt->FirstInterrupt, (void*)ServiceRoutine,
-             (unsigned long)Vector, (unsigned)Irql,
-             (InterruptMode == LevelSensitive) ? "level" : "edge",
-             (unsigned)ShareVector);
-
     /* Return success */
     *InterruptObject = &IoInterrupt->FirstInterrupt;
     return STATUS_SUCCESS;

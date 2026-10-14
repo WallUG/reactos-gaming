@@ -14,9 +14,6 @@
 #define NDEBUG
 #include <debug.h>
 
-/* TEMP-DIAG T5 (smp-port GPU/HDA hunt): periodic ISR census from irqobj.c */
-VOID NTAPI KiIsrDumpTotals(VOID);
-
 static KTIMER HbdTimer;
 static KDPC HbdDpc;
 static ULONG HbdTick = 0;
@@ -40,10 +37,6 @@ HbdDpcRoutine(
             HbdTick,
             KeGetCurrentThread(),
             (ULONG)KeGetCurrentIrql());
-
-    /* TEMP-DIAG T5: ISR census every ~60s (A2: trickle below the storm
-     * threshold). ~5 lines/min. Revert after test. */
-    if ((HbdTick % 30) == 0) KiIsrDumpTotals();
 }
 
 VOID

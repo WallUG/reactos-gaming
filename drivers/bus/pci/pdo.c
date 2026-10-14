@@ -116,10 +116,6 @@ PciFreezePirqRouting(
         DxxIr = (DxxIr & ~(0xFUL << ((Pin - 1) * 4))) | ((ULONG)L << ((Pin - 1) * 4));
         Base[i] = DxxIr;
         PciWriteLpcRc(L, Irq);
-        /* F2-1a DIAG: decision del freeze (caza el dev29: 17 vs 23). */
-        DbgPrint("PCIFRZ dev %u pin %u irq %u letra %u -> %u\n",
-                 (unsigned)Dev, (unsigned)Pin, (unsigned)Irq,
-                 (unsigned)Cur, (unsigned)L);
     }
 }
 
@@ -185,8 +181,8 @@ PciScanBridges(VOID)
     }
 }
 
-/* Camina hasta bus 0 LOGUEANDO (formatos PCIBRDG estables). TRUE si
- * llega, con la tripleta raiz (dev/func/pin 0-based). */
+/* Camina hasta bus 0. TRUE si llega, con la tripleta raiz
+ * (dev/func/pin 0-based). */
 static BOOLEAN
 PciWalkToRoot(
     _In_ ULONG BusNumber,
@@ -203,16 +199,11 @@ PciWalkToRoot(
 
     bus = BusNumber; dev = DeviceNumber; pin = InterruptPin - 1; lvl = 0;
     func = 0;
-    DbgPrint("PCIBRDG start bus %lu dev %lu pin %u\n",
-             BusNumber, DeviceNumber, (unsigned)InterruptPin);
     while (bus != 0 && bus < 16 && lvl < 8)
     {
         if (!PciParValid[bus]) break;
         /* Swizzle estándar: pin_padre = (pin + dev_secundario) % 4. */
         pin = (pin + dev) % 4;
-        DbgPrint("PCIBRDG lvl %lu bridge bus %u dev %u func %u -> pin %u\n",
-                 lvl, (unsigned)PciParBus[bus], (unsigned)PciParDev[bus],
-                 (unsigned)PciParFunc[bus], (unsigned)pin);
         dev = PciParDev[bus];
         func = PciParFunc[bus];
         bus = PciParBus[bus];
@@ -220,14 +211,11 @@ PciWalkToRoot(
     }
     if (bus == 0)
     {
-        DbgPrint("PCIBRDG root dev %lu func %lu pin %u (resolver en ARxx)\n",
-                 dev, func, (unsigned)pin);
         *RootDev = dev;
         *RootFunc = func;
         *RootPin = pin;
         return TRUE;
     }
-    DbgPrint("PCIBRDG no-parent bus %lu (cadena incompleta)\n", bus);
     return FALSE;
 }
 
@@ -268,25 +256,6 @@ PciPirqToGsi(
     PHYSICAL_ADDRESS PhysAddr;
     ULONG DxxIr;
     UCHAR Letter;
-    /* F2-1a DIAG: identidad + CMD (bit INTx-disable) + Line/Pin por
-     * candidato. Cubre GPU/HDA/xHCI/MEI/bus1dev0/EHCI#2. Revert after test. */
-    {
-        ULONG Id = 0xFFFFFFFF, Cmd = 0;
-        UCHAR Line = 0xFF, Pin = 0;
-        HalGetBusDataByOffset(PCIConfiguration, BusNumber,
-                              Slot.u.AsULONG, &Id, 0x00, sizeof(Id));
-        HalGetBusDataByOffset(PCIConfiguration, BusNumber,
-                              Slot.u.AsULONG, &Cmd, 0x04, sizeof(USHORT));
-        HalGetBusDataByOffset(PCIConfiguration, BusNumber,
-                              Slot.u.AsULONG, &Line, 0x3C, sizeof(Line));
-        HalGetBusDataByOffset(PCIConfiguration, BusNumber,
-                              Slot.u.AsULONG, &Pin, 0x3D, sizeof(Pin));
-        DbgPrint("PCIDEV bus %lu dev %lu func %lu ven %04lx devid %04lx cmd %04lx line %02x pin %u\n",
-                 BusNumber, (ULONG)Slot.u.bits.DeviceNumber,
-                 (ULONG)Slot.u.bits.FunctionNumber,
-                 Id & 0xFFFF, (Id >> 16) & 0xFFFF, Cmd & 0xFFFF,
-                 Line, (unsigned)Pin);
-    }
 
     if (BusNumber != 0)
     {
@@ -299,8 +268,6 @@ PciPirqToGsi(
                           &_rd, &_rf, &_rp) &&
             PciRootBridgeGsi(_rd, _rf, _rp, &_rg))
         {
-            DbgPrint("PCIFIX bus %lu dev %lu pin %u -> gsi %lu\n",
-                     BusNumber, DeviceNumber, (unsigned)InterruptPin, _rg);
             *Gsi = _rg;
             return TRUE;
         }
@@ -348,9 +315,6 @@ PciPirqToGsi(
     if (DxxIr & 0x88888888) return FALSE; /* reservados o basura */
     Letter = (UCHAR)((DxxIr >> ((InterruptPin - 1) * 4)) & 0x7);
     *Gsi = 16 + Letter;
-    /* F2-0: consistencia bus 0 (cruzar offline contra AR00). */
-    DbgPrint("PCIGSI bus 0 dev %lu pin %u -> gsi %lu\n",
-             DeviceNumber, (unsigned)InterruptPin, *Gsi);
     return TRUE;
 }
 
